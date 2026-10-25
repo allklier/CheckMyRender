@@ -89,6 +89,17 @@ def test_loudness_atsc_preset_from_spec(amedia, tmp_path):
     assert "ATSC A/85: I -24.3 LUFS" in f["message"]
 
 
+def test_loudness_unknown_standard_is_configuration_error(amedia, tmp_path):
+    spec = yaml.safe_load(SPEC.read_text())
+    spec["audio"]["loudness"]["standard"] = "ARIB TR-B32"
+    sp = tmp_path / "spec_arib.yaml"
+    sp.write_text(yaml.safe_dump(spec))
+    rc, fs = run(tmp_path, amedia["a_24_3"], spec=sp)
+    (f,) = by(fs, "audio.loudness")
+    assert rc == 3 and f["severity"] == "ERROR"
+    assert f["message"].startswith("configuration error: standard 'ARIB TR-B32' has no preset")
+
+
 def test_head_tail_excluded(amedia, tmp_path):
     rc, fs = run(tmp_path, amedia["a_hot_head_tail"])
     assert {(f["check_id"], f["severity"]) for f in fs if f["severity"] != "PASS"} == set()

@@ -11,9 +11,11 @@ checks:
     enabled: false
   video.blanking:
     severity: warn
+    quality: fast                 # 1 in fast_frame_step (5) frames: defects < 5 frames can be missed
   audio.loudness:
     severity: warn
   video.black_runs:
     max_black_run_frames: 24
+    quality: fast                 # quarter-resolution luma, every frame
   audio.silence:
     max_run_frames: 24

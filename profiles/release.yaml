@@ -11,8 +11,10 @@ checks:
       "ATSC A/85": {target_lufs: -24, tolerance_lu: 2, true_peak_max_dbtp: -2}
   video.blanking:
     severity: fail
+    quality: high                 # every frame (explicit: release never runs a fast pass)
   video.black_runs:
     max_black_run_frames: 6
+    quality: high
   audio.silence:
     max_run_frames: 6
   captions.presence:

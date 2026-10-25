@@ -5,7 +5,7 @@ Status: round 1 in progress - core + metadata checks implemented (see docs/ for 
 
 ## Requirements
 - CLI-first, scriptable, batch mode with a report. No GUI. Linux primary (Rocky Linux), macOS secondary.
-- Checks are defined in a config file (YAML for human-authored config (profiles, specs); JSON for machine-readable reports), as named *profiles* (e.g. `netflix_hd`, `internal_review`).
+- Checks are defined in a config file (YAML for human-authored config (profiles, specs); JSON for machine-readable reports), as named *profiles* (e.g. `netflix_hd`, `review`).
 - Two check families: **consistency** (metadata/settings vs. spec) and **content** (analysis of pixels/audio).
 - Initial checks:
   1. codec + resolution (+ pixel format, fps, colour tags)
@@ -19,7 +19,7 @@ Status: round 1 in progress - core + metadata checks implemented (see docs/ for 
 - False-positive reduction for blanking and audio-level checks using ML (cheap heuristic first, ML only to confirm/dismiss candidates).
 
 ## Architecture (proposed)
-Python 3, ffmpeg/ffprobe as media backend (present on dev box: /usr/bin/ffmpeg, ffprobe; mediainfo is not).
+Python 3, ffmpeg/ffprobe as media backend (mediainfo optional, not required).
 
     cli -> config loader -> job planner -> runner -> checks (plugins) -> results -> reporters
 
@@ -31,7 +31,7 @@ Python 3, ffmpeg/ffprobe as media backend (present on dev box: /usr/bin/ffmpeg, 
 - **Batch**: directory/glob input, parallel per file, optional watch-folder later.
 
 ## Decisions
-- Config: YAML. Python 3 (ffmpeg/ffprobe backend). Linux (Rocky) first with NVIDIA GPU assumed; Mac Studio follows as fits, must not constrain design.
+- Config: YAML. Python 3 (ffmpeg/ffprobe backend). Linux (Rocky) first with NVIDIA GPU assumed; macOS follows as fits, must not constrain design.
 - Formats: mostly file codecs (ProRes, H.264); EXR/DPX sequences possible -> media abstraction must cover "file" and "sequence".
 - Profiles (e.g. intermediate vs final) select/parameterize checks. Profiles may `extends` another profile.
 - Scope additions (accepted): frame rate + scan type; colour primaries/transfer/range tags; visual colour-space sanity (log-looking / extreme colours, quantified); duplicate/dropped frames; "doesn't decode" (corruption v1); true peak + clipping; silent channel; sample rate/bit depth; A/V sync (ML lip-sync to be explored); timecode + container checks; watermarks; banding; caption presence; spec-sheet comparison.
@@ -54,7 +54,7 @@ Python 3, ffmpeg/ffprobe as media backend (present on dev box: /usr/bin/ffmpeg, 
 - **Substitution rules**: whole-value refs keep type; missing key = ERROR; no expression language; resolve after `extends`; detect cycles; define list merge.
 - **Severity model**: PASS / INFO / WARN / FAIL / SKIPPED / ERROR (tool failure, distinct from FAIL). Profile sets per-check severity so a problem can be reported as info-only without failing QC. Exit codes: 0 pass, 1 warn, 2 fail, 3 tool error; `--fail-on`.
 - **Waivers**: file keyed by check id + file identity + frame range, with reason/author/expiry; waived and ML-dismissed findings stay visible in reports.
-- **Reproducible reports**: stamp tool/ffmpeg/model versions, hashes of profile/spec/waivers, file identity; stable ordering. Check available ffmpeg filters at startup (dev box is Ubuntu ffmpeg 6.1.1; Rocky build will differ).
+- **Reproducible reports**: stamp tool/ffmpeg/model versions, hashes of profile/spec/waivers, file identity; stable ordering. Check available ffmpeg filters at startup (verified so far against ffmpeg 6.1.1; other builds, e.g. on Rocky, may differ).
 - **Loudness**: measure program range only. **Dialogue-gated loudness is mandatory**; ffmpeg ebur128 has BS.1770 gating only (`ffmpeg -h filter=ebur128`). Needs a dialogue-aware meter: OPEN (licensed Dolby measurement vs. approximate speech-detection gating). Approximate results must not be reported as certified.
 - **Blanking**: must detect 1px edge errors on a few frames. ffmpeg cropdetect defaults (round=16, limit=0.094) miss this; use tight settings or own edge row/column statistics. Intentional pillarbox allowance = roadmap.
 - **Sequences**: structural checks (count, gaps, naming, header consistency) per unit; content checks still decode all frames. fps/TC from spec; EXR is linear so thresholds differ; audio via sidecar WAV; explicit start number.
@@ -104,12 +104,19 @@ v1: probe + metadata checks, filename, frame count, audio layout, BS.1770 loudne
 
 ## Decisions round 5
 - **Blanking** (video.blanking): one tap per edge; each outer pixel is compared with the pixel `max_depth` px further in (`lut2`), giving defect/matte coverage fractions per line. Detects lines >= `coverage` (default 0.5, profile-tunable; a wrong mask can blank only part of a line) black. `crop exact=1` + `format=yuv444p` mandatory (signalstats segfaults on 1px-wide 4:2:2 crops otherwise). Classes edge/matte, `persistent` flag. Filters kept (numpy hybrid measured no faster). Tuned on synthetic media only (35/35 planted defects found, 0 FP); needs real renders. Gaps: defects <50% of a line, non-black bad blanking, near-black vignettes. Knobs: docs/blanking.md.
-- **Engine**: frames computed from exact integer pts x time base (6-digit printed seconds were off by one beyond ~1000 s); taps print only needed keys; `-filter_complex_threads` defaults to min(8, cpu_count//2), override `--filter-threads`. Checks raise `ConfigError` for config problems. Known cost: black_runs (full-frame signalstats) ~19 s per 1440 frames, far more than blanking — needs a cheaper chain.
+- **Engine**: frames computed from exact integer pts x time base (6-digit printed seconds were off by one beyond ~1000 s); taps print only needed keys; `-filter_complex_threads` defaults to min(8, cpu_count//2), override `--filter-threads`. Checks raise `ConfigError` for config problems.
 - **Stills/thumbnails policy**: users are the people who rendered the file and can jump to the timecode in their app, so timecode is the primary locator. Stills are **off by default**, with one global switch to disable entirely; when on, they are produced only for finding types where a still is faster than seeking (e.g. visual look/colour, slate), capped per file, never for audio, metadata or black runs. Not yet implemented.
 
 ## Decisions round 6 (audio content checks)
 - **Loudness numbers live in the profile**: spec `audio.loudness` names only `standard` + `program_track`; profile `audio.loudness.standards` holds target/tolerance/true-peak ceiling per standard (EBU R128 -23 +-1 LU / -1 dBTP, ATSC A/85 -24 +-2 / -2 dBTP). This supersedes "loudness target" in "Spec sheets" below.
 - Audio checks (loudness, silence, silent channel, clipping) measure the program range only (atrim on sample bounds derived from head/tail layout, rounded half-up); per-frame levels via astats, frames derived from chunk index (pts_time printout has only 6 significant digits). Loudness reports always say "BS.1770 relative-gated, not dialogue-gated".
+
+## Decisions round 7 (quality modes)
+- `quality: fast|high` is a reserved per-check profile key (default high). Checks declare `qualities`; an unsupported mode is an ERROR so a report never claims a fast pass that did not happen. Findings carry `quality`; console marks `[fast mode]`. Details: docs/quality-modes.md.
+- **Blanking fast** = every `fast_frame_step`-th frame (default 5, per user). Defects >= 5 frames are always seen; shorter may be missed (4-frame defects caught at 4 of 5 phases in tests). Sampled findings report the sampled range plus the possible extent (+-step-1); `min_run_frames` is checked against the possible extent. Measured saving is small (~0.25 s per 1440 frames) because decode dominates; kept as asked.
+- **black_runs**: high = `format=yuv420p,signalstats` (same values as yuv444p on all test frames, ~2x faster); fast = quarter-resolution `scale=...:area` every frame (16x faster than the old chain; 1440 frames in ~1.2 s). Equivalence shown on synthetic media only; fast may flag grainy near-black frames (more candidates, not fewer) — acceptable for review renders (assumption).
+- Profiles: `review` (fast blanking + black_runs, filename info-only, captions off) and `release` (explicit high, stricter tolerances) both extend `final`; `internal_review` removed.
+- Process: agents use .agent-status/ (gitignored, deleted at finish) and write reference to docs/; only the main thread edits CLAUDE.md.
 
 ## Milestones
 1 core (media abstraction, probe, time/TC lib, config loader, severities, exit codes, JSON+console); 2 metadata checks; 3 single-pass content checks (black, silence, freeze, loudness/true peak, silent channel); 4 head/tail layout, 2-pop, blanking; 5 waivers, HTML/JUnit, batch; 6 ML verifiers, watermark, banding, captions, roadmap.

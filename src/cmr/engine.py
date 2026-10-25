@@ -1,6 +1,6 @@
 """Engine: check registry, timeline, single decode pass, detect -> verify -> evaluate.
 
-Check interface (see STATUS.md "Check interface" for the contract other modules build on):
+Check interface (see docs/check-interface.md for the contract other modules build on):
 
     @register
     class MyCheck(Check):
@@ -18,7 +18,7 @@ The engine merges every tap of every enabled check into ONE ffmpeg process
 `,metadata=mode=print:file=...` (audio: ametadata) appended; per-frame records are
 parsed and handed to detect() keyed by tap name.
 
-Verified on ffmpeg 6.1.1 (this box):
+Verified on ffmpeg 6.1.1 (dev machine):
 - a filtergraph whose branches all end in nullsink is rejected ("A filtergraph has
   zero outputs, this is not supported"), so every branch gets an output label and is
   mapped to `-f null -` (wrapped_avframe, no encode cost).
@@ -93,6 +93,7 @@ class Check:
     needs: frozenset = frozenset({"probe"})
     requires_filters: tuple[str, ...] = ()
     params_schema: dict | None = None
+    qualities: tuple[str, ...] = ("high",)   # profile `quality` values this check implements
 
     def taps(self, ctx: "CheckContext") -> list[Tap]:
         return []
@@ -217,6 +218,7 @@ class CheckContext:
     severity: Severity           # profile severity for a problem found by this check
     timeline: Timeline
     passinfo: PassInfo | None = None
+    quality: str = "high"        # profile `quality` (fast|high), validated per check
 
     def finding(self, message: str, severity=None, **kw) -> Finding:
         return Finding(check_id=self.check_id,
@@ -283,7 +285,7 @@ def build_graph(taps: list[tuple[str, Tap, str]], kinds: dict[int, str], tmp: Pa
 def default_filter_threads() -> int:
     """-filter_complex_threads default: half the CPUs, max 8. Measured (16-CPU box,
     1080p ProRes, blanking+black taps): 1 thread and 16 (= ffmpeg default, all CPUs)
-    were slowest; 4-8 fastest (see STATUS.md). Override: run_file(filter_threads=N),
+    were slowest; 4-8 fastest (see docs/check-interface.md). Override: run_file(filter_threads=N),
     CLI --filter-threads N."""
     return max(1, min(8, (os.cpu_count() or 2) // 2))
 
@@ -402,9 +404,13 @@ def run_file(path: Path, spec: dict, profile: dict, ffmpeg_bin="ffmpeg", ffprobe
             hint = f" (plugin import errors: {IMPORT_ERRORS})" if IMPORT_ERRORS else ""
             findings.append(Finding(cid, Severity.ERROR, f"unknown check id{hint}"))
             continue
-        params = {k: v for k, v in cfg.items() if k not in ("enabled", "severity")}
+        params = {k: v for k, v in cfg.items() if k not in ("enabled", "severity", "quality")}
+        quality = cfg.get("quality", "high")
         try:
             sev = Severity.parse(cfg.get("severity", "fail"))
+            if quality not in check.qualities:   # value itself checked by PROFILE_SCHEMA
+                raise ValueError(f"quality {quality!r} not implemented "
+                                 f"(supports: {', '.join(check.qualities)})")
             if check.params_schema:
                 jsonschema.validate(params, check.params_schema)
         except (ValueError, jsonschema.ValidationError) as e:
@@ -414,7 +420,8 @@ def run_file(path: Path, spec: dict, profile: dict, ffmpeg_bin="ffmpeg", ffprobe
         if missing:
             findings.append(Finding(cid, Severity.ERROR, f"ffmpeg lacks filter(s): {', '.join(missing)}"))
             continue
-        contexts.append((check, CheckContext(cid, media, spec, params, sev, timeline)))
+        contexts.append((check, CheckContext(cid, media, spec, params, sev, timeline,
+                                             quality=quality)))
 
     # collect taps, run the single pass if anything needs it
     all_taps, tap_owner, tap_errors = [], {}, {}
@@ -476,6 +483,8 @@ def run_file(path: Path, spec: dict, profile: dict, ffmpeg_bin="ffmpeg", ffprobe
         except Exception as e:
             tb = traceback.format_exception_only(type(e), e)[-1].strip()
             out = [ctx.finding(f"check crashed: {tb}", Severity.ERROR)]
+        for f in out:
+            f.quality = ctx.quality
         findings.extend(out)
 
     for f in findings:

@@ -41,8 +41,10 @@ class Black(Check):
   The printed pts_time has only 6 significant digits and is not used for frames.
   Only frames that carry metadata are printed by ffmpeg, so a frame can be absent.
 - `ctx` (`CheckContext`): `check_id`, `media` (MediaInfo, mapped probe), `spec` (dict),
-  `params` (profile params after ${spec.*} substitution, without `enabled`/`severity`),
-  `severity` (profile severity for a problem, default FAIL), `timeline`, `passinfo`.
+  `params` (profile params after ${spec.*} substitution, without `enabled`/`severity`/`quality`),
+  `severity` (profile severity for a problem, default FAIL), `timeline`, `passinfo`,
+  `quality` (`fast`|`high`, default high; a check lists supported modes in class attr
+  `qualities`, default `("high",)`; see docs/quality-modes.md).
   `ctx.finding(msg, severity=None, **Finding fields)` builds a Finding at the profile severity.
 - `ctx.timeline` (`Timeline`): `fps` (Fraction), `drop`, `file_frames`, `start_frame`
   (TC of frame 0 as frame count), `tc_source` (file|spec|none), `head_frames`, `tail_frames`,
@@ -58,19 +60,21 @@ class Black(Check):
   Measured (16 CPUs, 1080p ProRes, 1440 frames, s): blanking only 1:1.8 2:1.6 4:1.7 8:2.1
   16:3.6; blanking+black_runs 1:65 2:39 4:25 8:21.6 16:20.2 (decode only 0.8). 16 (= ffmpeg
   default, all CPUs) hurts small-strip taps, 1-2 starve full-frame taps; 8 is the compromise.
-  black_runs dominates: full-frame `format=yuv444p,signalstats` ~19 s/1440 frames standalone
-  (signalstats alone 11.9 s) - owner may want a cheaper chain.
+  black_runs dominated with full-frame `format=yuv444p,signalstats` (~19 s/1440 frames);
+  now `format=yuv420p,signalstats` (high, ~9 s) or quarter-res (fast, ~1.2 s), see
+  docs/quality-modes.md.
 - Engine fills `timecode_start/end` from `frame_start/end` for every finding; reports show
   TC + frame. Frame ranges are INCLUSIVE.
 - Candidate: `{check_id, stream, frame_start, frame_end, score, evidence[]}`.
 - Finding: `{check_id, severity, raw_severity, message, stream, frame_start, frame_end,
-  timecode_start, timecode_end, expected, actual, candidate, evidence[], verifier, waiver_ref}`.
+  timecode_start, timecode_end, expected, actual, candidate, evidence[], verifier, waiver_ref,
+  quality}` (`quality` filled by the engine with the check's mode; null for engine errors).
 - Verifier hook: `engine.VERIFIERS[check_id] = fn(candidate, ctx) -> {"decision", "p",
   "model_hash", "severity"}`; applied to findings that carry a `candidate`; the engine calls
   `Finding.lower_to()` so a verifier can only LOWER severity. Empty in v1.
 - Severities: PASS < SKIPPED < INFO < WARN < FAIL < ERROR. Exit: 0 pass, 1 warn
   (0 with `--fail-on fail`), 2 fail, 3 ERROR / config error.
-- Profile check entry: reserved keys `enabled` (default true), `severity` (default fail);
-  everything else is params. Spec values reach checks only via `${spec.*}` refs in the profile
+- Profile check entry: reserved keys `enabled` (default true), `severity` (default fail),
+  `quality` (fast|high, default high); everything else is params. Spec values reach checks only via `${spec.*}` refs in the profile
   (whole-value refs keep type; pass whole sections like `timing: "${spec.timing}"` when a
   check needs optional keys).

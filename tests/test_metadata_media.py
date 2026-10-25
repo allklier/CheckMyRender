@@ -78,7 +78,7 @@ def test_short_program(media, tmp_path):
 def test_captions_and_profile_severity(media, tmp_path):
     rc, rep = run(tmp_path, [media["no_captions"]])
     assert rc == 2 and problems(rep) == {("captions.presence", "FAIL")}
-    rc, rep = run(tmp_path, [media["no_captions"]], profile="internal_review")
+    rc, rep = run(tmp_path, [media["no_captions"]], profile="review")
     assert rc == 0 and "captions.presence" not in {f["check_id"] for f in rep["files"][0]["findings"]}
 
 

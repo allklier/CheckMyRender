@@ -45,10 +45,9 @@
      engine owner should parse `pts:` + stream time base.
   2. No tap sharing: silence, silent_channel and clipping each run an identical astats tap
      (3x asplit per stream). Cheap, but a shared-tap mechanism would remove it.
-  3. A config error raised inside detect() (unknown loudness standard) is reported as
-     "check crashed: ValueError ..." (ERROR, correct severity, odd wording). Engine now has
-     `ConfigError` -> "configuration error: ..."; audio_content.py still raises ValueError
-     (owner to switch).
+  3. FIXED: an unknown loudness standard raises `engine.ConfigError` -> ERROR
+     "configuration error: standard ... has no preset" (test
+     `test_loudness_unknown_standard_is_configuration_error`).
 - Not verified / limits: non-48k-multiple rates (sr/fps not an integer, e.g. 29.97) attribute
   chunks with < 1 frame spill (unit-tested arithmetic only, no 29.97 media); 5.1/7.1 channel
   weighting in ebur128 (no multichannel media); mono program tracks are measured as single

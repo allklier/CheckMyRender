@@ -69,6 +69,11 @@ def cmd_profiles(a) -> int:
     except ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
         return EXIT_ERROR
+    engine.load_checks()   # show the effective `quality` of checks that have a fast mode
+    for cid, cfg in (prof.get("checks") or {}).items():
+        chk = engine.REGISTRY.get(cid)
+        if chk is not None and len(chk.qualities) > 1 and isinstance(cfg, dict):
+            cfg.setdefault("quality", "high")
     print(yaml.safe_dump(prof, sort_keys=False), end="")
     return EXIT_PASS
 

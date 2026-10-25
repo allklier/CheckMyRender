@@ -1,7 +1,7 @@
 """Media abstraction: one ffprobe per file -> MediaInfo, plus the value-mapping layer
 that translates ffprobe vocabulary into spec vocabulary.
 
-Verified on this machine (ffprobe 6.1.1, `ffprobe -v error -print_format json
+Verified with ffprobe 6.1.1 (`ffprobe -v error -print_format json
 -show_format -show_streams`, ProRes/PCM/tmcd/c608 MOV written by ffmpeg):
 - prores `profile` strings: Proxy, LT, Standard, HQ, 4444, XQ
 - `field_order`: 'progressive' for prores_ks output; interlaced = tt/bb/tb/bt

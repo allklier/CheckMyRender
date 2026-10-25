@@ -23,6 +23,11 @@ break nor extend a run. A run covering >= persistent_fraction of the edge's
 non-skip frames is marked persistent (consistent over time: intentional matte,
 or a whole-clip 1px column).
 
+quality: fast measures file frames 0, s, 2s, ... only (s = fast_frame_step, default
+5; `select` before the crops). A defect lasting >= s consecutive frames is always
+seen; a shorter one is seen only if it covers a multiple of s. Sampled runs report
+the sampled first..last frame plus the possible true extent (+- s-1 frames).
+
 Why per-pixel: signalstats only offers YMIN/YLOW(10th pct)/YAVG/YHIGH(90th pct)/
 YMAX for luma (no median; full key list printed on ffmpeg 6.1.1), so no strip
 statistic means ">= 50% black". Binarising first makes YAVG the coverage, and
@@ -60,6 +65,7 @@ DEFAULTS = {
     "max_depth": 16,             # px: inner line offset; deeper black = "matte"
     "min_run_frames": 1,         # shortest run reported
     "persistent_fraction": 0.9,  # run covering this share of the edge's frames = persistent
+    "fast_frame_step": 5,        # quality: fast examines every Nth file frame only
     "class_severity": {          # severity per class, capped by the profile `severity`
         "edge": "FAIL",
         "edge_persistent": "FAIL",
@@ -87,16 +93,19 @@ def _geometry(edge: str, d: int) -> tuple[str, str, str]:
     return f"w={d + 1}:h=ih:x=iw-{d + 1}:y=0", f"w=1:h=ih:x={d}:y=0", "w=1:h=ih:x=0:y=0"
 
 
-def chains(params: dict | None) -> dict[str, str]:
+def chains(params: dict | None, frame_step: int = 1) -> dict[str, str]:
     """{tap name (= edge): filter chain}. Each chain takes one video input and ends
-    in signalstats; internal labels are prefixed `bk<edge>` (unique in the graph)."""
+    in signalstats; internal labels are prefixed `bk<edge>` (unique in the graph).
+    frame_step > 1 (quality: fast) prepends `select='not(mod(n,step))'`: only file
+    frames 0, step, 2*step, ... are measured (n = input frame number from 0)."""
     p = params_with_defaults(params)
+    sel = f"select='not(mod(n,{frame_step}))'," if frame_step > 1 else ""
     bl, ml, mc = p["black_luma"], p["matte_luma"], p["min_contrast"]
     out = {}
     for e in EDGES:
         strip, outer, inner = _geometry(e, int(p["max_depth"]))
         a, b = f"bk{e}a", f"bk{e}b"
-        out[e] = (f"crop={strip}:exact=1,format=yuv444p,shuffleplanes=0:0:0,split[{a}][{b}];"
+        out[e] = (f"{sel}crop={strip}:exact=1,format=yuv444p,shuffleplanes=0:0:0,split[{a}][{b}];"
                   f"[{a}]crop={outer}:exact=1[{a}o];[{b}]crop={inner}:exact=1[{b}o];"
                   f"[{a}o][{b}o]lut2=c0='255*lte(x,{bl})*gte(y-x,{mc})':"
                   f"c1='255*lte(x,{bl})*lte(y,{ml})':c2='max(x,y)',signalstats")
@@ -140,8 +149,14 @@ def classify(stats: Stats, params: dict | None = None):
     return out
 
 
-def detect(stats: Stats, params: dict | None = None, stream: int = 0) -> list[Candidate]:
-    """Stage 1: per-frame stats -> Candidates (frame_end inclusive)."""
+def detect(stats: Stats, params: dict | None = None, stream: int = 0,
+           frame_step: int = 1) -> list[Candidate]:
+    """Stage 1: per-frame stats -> Candidates (frame_end inclusive).
+    frame_step > 1: stats hold every step-th frame only (quality: fast). Consecutive
+    samples with the same label join into one run; the candidate's frame range is the
+    first..last SAMPLED frame and the true boundaries may lie up to step-1 frames
+    outside it (evidence possible_frame_start/end). min_run_frames is compared with
+    that largest possible extent, so a sampled hit is never dropped as too short."""
     p = params_with_defaults(params)
     cands = []
     for e, seq in classify(stats, p).items():
@@ -151,25 +166,35 @@ def detect(stats: Stats, params: dict | None = None, stream: int = 0) -> list[Ca
             if lab == "skip":
                 continue
             if run and lab != run[0]:
-                cands.append(_candidate(e, run[0], run[1], stats, p, counted, stream))
+                cands.append(_candidate(e, run[0], run[1], stats, p, counted, stream, frame_step))
                 run = None
             if lab:
                 run = run or [lab, []]
                 run[1].append(f)
+    if frame_step > 1:
+        return [c for c in cands if c.evidence[0]["possible_frame_end"]
+                - c.evidence[0]["possible_frame_start"] + 1 >= p["min_run_frames"]]
     return [c for c in cands if c.evidence[0]["frames"] >= p["min_run_frames"]]
 
 
-def _candidate(edge, kind, frames, stats, p, counted, stream):
+def _candidate(edge, kind, frames, stats, p, counted, stream, frame_step=1):
     cov = [stats[edge][f][0 if kind == "edge" else 1] for f in frames]
     n = len(frames)
     mean = sum(cov) / n
-    return Candidate(CHECK_ID, stream, frames[0], frames[-1],
-                     # score: mean coverage for edges; mattes are likely intentional -> halved
-                     round(mean if kind == "edge" else mean / 2, 3), [{
+    ev = {
         "edge": edge, "kind": kind, "persistent": n >= p["persistent_fraction"] * counted,
         "frames": n, "coverage_mean": round(mean, 3), "coverage_max": round(max(cov), 3),
         "depth_px": f"1-{p['max_depth']}" if kind == "edge" else f">{p['max_depth']}",
-    }])
+    }
+    if frame_step > 1:   # sampled: no exact run length, state the boundary uncertainty
+        del ev["frames"]
+        ev.update(frame_step=frame_step, frames_sampled=n,
+                  possible_frame_start=max(0, frames[0] - (frame_step - 1)),
+                  possible_frame_end=frames[-1] + frame_step - 1,
+                  boundary_uncertainty_frames=frame_step - 1)
+    return Candidate(CHECK_ID, stream, frames[0], frames[-1],
+                     # score: mean coverage for edges; mattes are likely intentional -> halved
+                     round(mean if kind == "edge" else mean / 2, 3), [ev])
 
 
 def evaluate(candidates: list[Candidate], params: dict | None = None,
@@ -186,9 +211,15 @@ def evaluate(candidates: list[Candidate], params: dict | None = None,
         sev = min(Severity.parse(p["class_severity"][cls]), cap)
         what = ("black edge (non-picture)" if ev["kind"] == "edge"
                 else "black bar (matte/letterbox/pillarbox?)")
+        if "frame_step" in ev:
+            n = (f"seen on {ev['frames_sampled']} sampled frame(s) (fast: 1 in "
+                 f"{ev['frame_step']} frames; true start/end up to "
+                 f"{ev['boundary_uncertainty_frames']} frame(s) outside the range shown)")
+        else:
+            n = f"{ev['frames']} frame(s)"
         out.append(Finding(
             check_id, sev,
-            f"{ev['edge']}: {what}, {ev['coverage_max']:.0%} of line, {ev['frames']} frame(s)"
+            f"{ev['edge']}: {what}, {ev['coverage_max']:.0%} of line, {n}"
             + (", persistent" if ev["persistent"] else ""),
             stream=c.stream, frame_start=c.frame_start, frame_end=c.frame_end,
             candidate=c, evidence=c.evidence))

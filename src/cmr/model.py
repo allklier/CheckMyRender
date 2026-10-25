@@ -76,6 +76,7 @@ class Finding:
     evidence: list[dict] = field(default_factory=list)
     verifier: dict | None = None            # {decision, p, model_hash}; None = no verifier ran
     waiver_ref: str | None = None           # waivers = v1.1
+    quality: str | None = None              # 'fast' | 'high' mode that produced it (engine fills)
 
     def __post_init__(self):
         self.severity = Severity.parse(self.severity)

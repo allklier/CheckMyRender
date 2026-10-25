@@ -69,11 +69,11 @@ def test_profile_schema_rejects_unknown_top_level(tmp_path):
 
 def test_bundled_profiles_resolve_against_example_spec():
     spec, _ = load_spec(ROOT / "examples" / "spec_hd_broadcast.yaml")
-    for name in ("final", "internal_review"):
+    for name in ("final", "review", "release"):
         prof, _ = resolve_profile(name, spec)
         assert prof["checks"]["video.fps"]["expect"] == "24000/1001"
         assert prof["checks"]["video.resolution"]["width"] == 1920
-    prof, _ = resolve_profile("internal_review", spec)
+    prof, _ = resolve_profile("review", spec)
     assert prof["checks"]["filename"]["severity"] == "info"
     assert prof["checks"]["captions.presence"]["enabled"] is False
 

@@ -4,6 +4,8 @@ Versioned: spec_version / profile_version / report schema_version."""
 SEVERITY_NAMES = ["PASS", "SKIPPED", "INFO", "WARN", "FAIL", "ERROR"]
 _sev_in = {"type": "string", "pattern": "^(?i:pass|skipped|info|warn|fail|error)$"}
 
+QUALITIES = ["fast", "high"]   # per-check `quality`; default high
+
 SEGMENT_TYPES = ["slate", "black", "bars_tone", "two_pop", "program"]
 
 SPEC_SCHEMA = {
@@ -55,7 +57,8 @@ PROFILE_SCHEMA = {
         "description": {"type": "string"},
         "checks": {"type": "object", "additionalProperties": {
             "type": "object",
-            "properties": {"enabled": {"type": "boolean"}, "severity": _sev_in}}},
+            "properties": {"enabled": {"type": "boolean"}, "severity": _sev_in,
+                           "quality": {"enum": QUALITIES}}}},
     },
     "additionalProperties": False,
 }
@@ -81,6 +84,7 @@ FINDING_SCHEMA = {
         "candidate": {"oneOf": [{"type": "null"}, CANDIDATE_SCHEMA]},
         "evidence": {"type": "array"},
         "verifier": {"type": ["object", "null"]}, "waiver_ref": {"type": ["string", "null"]},
+        "quality": {"enum": QUALITIES + [None]},
     },
 }
 REPORT_SCHEMA = {

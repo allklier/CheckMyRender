@@ -22,7 +22,8 @@ def render(report: dict, verbose: bool = False) -> str:
         for fd in f["findings"]:
             if fd["severity"] == "PASS" and not verbose:
                 continue
-            lines.append(f"  {fd['severity']:7} {fd['check_id']}: {fd['message']}{_loc(fd)}")
+            fast = " [fast mode]" if fd.get("quality") == "fast" else ""
+            lines.append(f"  {fd['severity']:7} {fd['check_id']}{fast}: {fd['message']}{_loc(fd)}")
     s = report["summary"]
     counts = ", ".join(f"{k} {v}" for k, v in s["counts"].items() if v)
     lines.append(f"RESULT {s['worst']} (exit {s['exit_code']}): {counts}")

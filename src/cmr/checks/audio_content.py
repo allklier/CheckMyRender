@@ -21,7 +21,7 @@ The last record gives I and LRA; true peak = 20*log10(last true_peak). The first
 running true peak exceeds the ceiling locates the overshoot to a 100 ms block (N = sr // 10).
 ebur128 is BS.1770 gating (absolute -70 LUFS + relative -10 LU), NOT dialogue-gated.
 
-Verified on ffmpeg 6.1.1 (this box): `ffmpeg -h filter=ebur128` (metadata, peak=true, keys
+Verified on ffmpeg 6.1.1 (dev machine): `ffmpeg -h filter=ebur128` (metadata, peak=true, keys
 seen in output), `-h filter=astats` (metadata, reset, measure_perchannel Peak_level,
 measure_overall none; key lavfi.astats.<ch 1-based>.Peak_level, digital silence = -inf),
 `-h filter=asetnsamples` (n, p), `-h filter=atrim` (start_sample, end_sample).
@@ -33,7 +33,7 @@ from __future__ import annotations
 import math
 from fractions import Fraction
 
-from ..engine import Check, Skip, Tap, register
+from ..engine import Check, ConfigError, Skip, Tap, register
 from ..model import Candidate, Severity
 
 
@@ -239,7 +239,7 @@ class Loudness(Check):
         std = ctx.params["loudness"]["standard"]
         preset = ctx.params["standards"].get(std)
         if preset is None:
-            raise ValueError(f"standard {std!r} has no preset in the profile "
+            raise ConfigError(f"standard {std!r} has no preset in the profile "
                              f"(known: {', '.join(ctx.params['standards'])})")
         start, end, sr = _program(ctx, s)
         last = recs[-1].values

@@ -106,7 +106,7 @@ class VideoScan(Check):
 @register
 class VideoColor(Check):
     """Colour tags. Untagged ('unknown') is reported at `unknown_severity` (default warn):
-    e.g. ffprobe never reports color_range for ProRes-in-MOV on this box."""
+    e.g. ffprobe never reports color_range for ProRes-in-MOV on the dev machine."""
     id = "video.color"
 
     def evaluate(self, ctx, candidates):

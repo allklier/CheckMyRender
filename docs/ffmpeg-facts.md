@@ -1,4 +1,4 @@
-# Verified ffmpeg/ffprobe facts (ffmpeg 6.1.1, Ubuntu dev box)
+# Verified ffmpeg/ffprobe facts (ffmpeg 6.1.1)
 
 Rocky build is UNVERIFIED.
 

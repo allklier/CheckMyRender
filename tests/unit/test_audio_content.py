@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from cmr.checks import audio_content as ac
-from cmr.engine import CheckContext, MetaRecord, Skip, Timeline
+from cmr.engine import CheckContext, ConfigError, MetaRecord, Skip, Timeline
 from cmr.model import Severity
 
 
@@ -104,5 +104,5 @@ def test_loudness_pass_reports_measurement_and_gating():
 
 def test_loudness_unknown_standard_is_an_error():
     c = ctx("audio.loudness", {**PARAMS, "loudness": {"standard": "ARIB"}})
-    with pytest.raises(ValueError, match="no preset"):
+    with pytest.raises(ConfigError, match="no preset"):
         ac.Loudness().detect(c, {"r128": [r128(-23, 0, 0.5)]})

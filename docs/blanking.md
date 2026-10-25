@@ -3,7 +3,7 @@
 Check id `video.blanking` (package `src/cmr/checks/blanking/`, tests `tests/blanking/`).
 
 ## Milestones
-- [x] M1 ffmpeg filters verified on this box (6.1.1), approach measured
+- [x] M1 ffmpeg filters verified on ffmpeg 6.1.1, approach measured
 - [x] M2 detector (stage 1) + evaluate, test media generator, recall/FP measurement
 - [x] M3 adapted to core check interface (STATUS.md): Tap / MetaRecord / Candidate / Finding
 - [x] M4 partial-line coverage (>= 50% of a row/column), per-pixel lut2; 4 taps x 3 keys
@@ -60,3 +60,5 @@ Raw-frame numpy hybrid measured earlier: no speed gain.
 - Matte in dark frames (<= dark_frame_luma) is not judged.
 - Inner line is a single row/column (per-pixel compare); a defect exactly max_depth px deep
   or more is reported as matte.
+- quality: fast (profile `review`) measures 1 in `fast_frame_step` (5) frames: defects shorter
+  than 5 frames can be missed; see docs/quality-modes.md.

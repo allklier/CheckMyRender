@@ -1,9 +1,17 @@
 """video.black_runs: runs of black frames inside the PROGRAM range.
 
-Stage 1: `format=yuv444p,signalstats` per frame (verified: `ffmpeg -h filter=signalstats`
-lists no per-frame options; it prints lavfi.signalstats.YHIGH etc. for every frame).
-format=yuv444p normalises 10-bit to 8-bit and keeps the tv range (black = 16), same as
-the blanking detector. A frame is black when YHIGH (90th percentile luma) <= black_luma,
+Stage 1: signalstats per frame (verified: `ffmpeg -h filter=signalstats` lists no
+per-frame options; it prints lavfi.signalstats.YHIGH etc. for every frame), on 8-bit
+tv-range luma (black = 16):
+  quality high: `format=yuv420p,signalstats` - YHIGH identical per frame to the former
+    `format=yuv444p,signalstats` (0 differences over 1,980 test frames, see
+    docs/quality-modes.md) at ~45% of its cost (only the chroma planes differ).
+  quality fast: `scale=iw/4:ih/4:flags=area+accurate_rnd,format=yuv420p,signalstats`
+    (1/16 of the pixels, every frame). Area averaging lowers YHIGH on grainy near-black
+    (more frames called black = more candidates, not fewer) and raises it where thin
+    bright lines cover <10% of a black frame; flat levels match (accurate_rnd removes a
+    +1 bias). Every frame is still measured, so run lengths stay frame-exact.
+A frame is black when YHIGH (90th percentile luma) <= black_luma,
 so a dark-but-not-black scene (YHIGH well above 16) is not flagged. Runs are found on
 integer frames, clipped to timeline.program_start..program_end (head/tail layout black
 is intentional and ignored). A run longer than `max_black_run_frames` is a candidate.
@@ -16,6 +24,8 @@ from cmr.engine import Check, Skip, Tap, register
 from cmr.model import Candidate
 
 KEY = "lavfi.signalstats.YHIGH"
+CHAINS = {"high": "format=yuv420p,signalstats",
+          "fast": "scale=iw/4:ih/4:flags=area+accurate_rnd,format=yuv420p,signalstats"}
 BLACK_LUMA = 24            # 8-bit code value; tv black = 16
 
 
@@ -23,7 +33,8 @@ BLACK_LUMA = 24            # 8-bit code value; tv black = 16
 class BlackRuns(Check):
     id = "video.black_runs"
     needs = frozenset({"probe"})
-    requires_filters = ("format", "signalstats")
+    requires_filters = ("format", "scale", "signalstats")
+    qualities = ("fast", "high")
     params_schema = {
         "type": "object", "additionalProperties": False,
         "required": ["max_black_run_frames"],
@@ -32,7 +43,7 @@ class BlackRuns(Check):
     }
 
     def taps(self, ctx):
-        return [Tap("black", ctx.media.video[0]["index"], "format=yuv444p,signalstats", (KEY,))]
+        return [Tap("black", ctx.media.video[0]["index"], CHAINS[ctx.quality], (KEY,))]
 
     def detect(self, ctx, records):
         tl = ctx.timeline
