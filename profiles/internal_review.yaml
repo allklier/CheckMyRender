@@ -1,0 +1,10 @@
+# Internal review render: same rules as final, but naming/captions are not gating.
+profile_version: 1
+name: internal_review
+extends: final
+description: Internal review - filename info-only, captions not checked.
+checks:
+  filename:
+    severity: info
+  captions.presence:
+    enabled: false

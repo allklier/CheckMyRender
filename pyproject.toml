@@ -1,0 +1,15 @@
+[project]
+name = "check_my_render"
+version = "0.0.1"
+description = "Render QC: metadata and content checks against delivery specs"
+requires-python = ">=3.12"
+dependencies = ["PyYAML", "jsonschema"]
+
+[project.scripts]
+cmr = "cmr.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

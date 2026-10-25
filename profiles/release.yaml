@@ -1,0 +1,19 @@
+# Release / delivery renders going to the client or broadcaster. Strictest profile.
+# Everything in `final` applies; this tightens what is judged against the delivery spec.
+profile_version: 1
+name: release
+extends: final
+description: Release renders - strict loudness tolerance, blanking and captions gating.
+checks:
+  audio.loudness:
+    standards:
+      "EBU R128": {target_lufs: -23, tolerance_lu: 0.5, true_peak_max_dbtp: -1}
+      "ATSC A/85": {target_lufs: -24, tolerance_lu: 2, true_peak_max_dbtp: -2}
+  video.blanking:
+    severity: fail
+  video.black_runs:
+    max_black_run_frames: 6
+  audio.silence:
+    max_run_frames: 6
+  captions.presence:
+    severity: fail

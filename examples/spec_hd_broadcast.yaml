@@ -1,0 +1,60 @@
+# Example delivery spec sheet: HD broadcast, file-based. DRAFT - values illustrative.
+# Spec = facts about THIS job. Rules (tolerances, severities, max run lengths) live in the profile.
+spec_version: 1
+job:
+  title: "Show Name"
+  title_code: "SHOWNAME"          # filename-safe code used in naming_pattern
+  episode: "101"
+  version: "v03"
+  client: "Network X"
+  # If both are given, an explicit filename wins over naming_pattern. fps_tag mapping is defined in the profile.
+  # filename: "SHOWNAME_101_HD_2398_ST_v03.mov"
+  naming_pattern: "{title_code}_{episode}_{format}_{fps_tag}_{audio_tag}_{version}.mov"
+
+video:
+  container: mov
+  codec: prores
+  codec_profile: "422 HQ"
+  width: 1920
+  height: 1080
+  fps: "24000/1001"            # exact rational, never a float
+  scan: progressive
+  pixel_format: yuv422p10le
+  color: {primaries: bt709, transfer: bt709, matrix: bt709, range: tv}
+  aspect_ratio: "16:9"
+  pixel_aspect: 1.0
+
+timing:
+  # All positions are integer frames; timecode is converted with the DF/NDF mode below.
+  timecode_mode: non-drop
+  # file_start_timecode: optional; derived from head_layout + program_start if omitted
+  program_start_timecode: "01:00:00:00"  # first program frame (FFOA)
+  program_duration_frames: 86400         # program only, excludes head/tail
+  # duration clock: frame count (not wall clock; NDF 23.976 drifts from wall clock)
+
+  # Video head: strictly sequential segments, starting at file frame 0.
+  head_layout:
+    - {type: slate, frames: 1}           # content comparison = future work
+    - {type: black, frames: 23}          # head length is set here, per spec
+    - {type: program}                    # program begins here; must land on program_start_timecode
+  tail_layout:
+    - {type: black, frames: 24}
+
+
+audio:
+  sample_rate: 48000
+  bit_depth: 24
+  codec: pcm_s24le
+  # tracks refers to audio STREAMS in file order; layout says how channels are grouped.
+  # (Flame may write one mono stream per channel - declare 'merge' to treat them as one layout.)
+  tracks:
+    - {index: 0, layout: stereo, content: "Stereo mix L/R"}
+    - {index: 1, layout: stereo, content: "M&E L/R"}
+  loudness:
+    standard: "EBU R128"                 # measurement rules (gating, range) live in the profile
+    program_track: 0
+
+content:
+  captions: {required: true, formats: [embedded_608]}   # sidecars (scc/srt) = roadmap
+
+# Run: cmr check file.mov --spec this.yaml --profile final

@@ -1,0 +1,42 @@
+# Example spec for a review render (use with --profile review). DRAFT - values illustrative.
+spec_version: 1
+job:
+  title: "Show Name"
+  title_code: "SHOWNAME"
+  episode: "101"
+  version: "v02"
+  client: "Internal"
+  naming_pattern: "{title_code}_{episode}_{format}_{fps_tag}_{audio_tag}_{version}.mov"
+video:
+  container: mov
+  codec: prores
+  codec_profile: "422"
+  width: 1920
+  height: 1080
+  fps: "24000/1001"
+  scan: progressive
+  pixel_format: yuv422p10le
+  color: {primaries: bt709, transfer: bt709, matrix: bt709, range: tv}
+  aspect_ratio: "16:9"
+  pixel_aspect: 1.0
+timing:
+  timecode_mode: non-drop
+  program_start_timecode: "01:00:00:00"
+  program_duration_frames: 2880          # 2 min review cut
+  head_layout:
+    - {type: slate, frames: 1}
+    - {type: black, frames: 23}
+    - {type: program}
+  tail_layout:
+    - {type: black, frames: 24}
+audio:
+  sample_rate: 48000
+  bit_depth: 24
+  codec: pcm_s24le
+  tracks:
+    - {index: 0, layout: stereo, content: "Stereo mix L/R"}
+  loudness:
+    standard: "EBU R128"
+    program_track: 0
+content:
+  captions: {required: false, formats: []}

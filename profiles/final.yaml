@@ -1,0 +1,69 @@
+# Final delivery QC. Rules only; job values come from the spec via ${spec.*}.
+# Per check: `enabled` (default true), `severity` (problem severity, default fail),
+# everything else = check params.
+profile_version: 1
+name: final
+description: Final delivery - metadata vs spec, decode check.
+checks:
+  container.format:
+    expect: "${spec.video.container}"
+  video.codec:
+    codec: "${spec.video.codec}"
+    profile: "${spec.video.codec_profile}"
+  video.resolution:
+    width: "${spec.video.width}"
+    height: "${spec.video.height}"
+    pixel_aspect: "${spec.video.pixel_aspect}"
+    aspect_ratio: "${spec.video.aspect_ratio}"
+  video.pixel_format:
+    expect: "${spec.video.pixel_format}"
+  video.fps:
+    expect: "${spec.video.fps}"
+  video.scan:
+    expect: "${spec.video.scan}"
+    unknown_severity: warn
+  video.color:
+    expect: "${spec.video.color}"
+    unknown_severity: warn        # ProRes-in-MOV never reports color_range via ffprobe
+  audio.format:
+    codec: "${spec.audio.codec}"
+    sample_rate: "${spec.audio.sample_rate}"
+    bit_depth: "${spec.audio.bit_depth}"
+  audio.layout:
+    tracks: "${spec.audio.tracks}"
+  filename:
+    job: "${spec.job}"
+    tags:
+      format: {from: "${spec.video.height}", map: {720: HD, 1080: HD, 2160: UHD}}
+      fps_tag: {from: "${spec.video.fps}", map: {"24000/1001": "2398", "24": "24", "25": "25",
+                                                 "30000/1001": "2997", "60000/1001": "5994"}}
+      audio_tag: {from: "${spec.audio.tracks.0.layout}", map: {mono: MO, stereo: ST, "5.1": "51"}}
+  timing.frame_count:
+    timing: "${spec.timing}"
+    tolerance_frames: 0
+  timing.layout:
+    timing: "${spec.timing}"
+  timing.timecode_start:
+    timing: "${spec.timing}"
+  captions.presence:
+    captions: "${spec.content.captions}"
+  video.black_runs:
+    max_black_run_frames: 12     # ~0.5 s at 24p; a fade or cut to black below this passes
+  video.blanking:                 # 1px edge defects; thresholds default in the check, tune here
+    severity: fail
+  audio.loudness:                 # BS.1770 relative-gated over the program range (not dialogue-gated)
+    loudness: "${spec.audio.loudness}"    # spec names the standard + program_track only
+    standards:                    # numbers per standard live here, not in the spec
+      "EBU R128": {target_lufs: -23, tolerance_lu: 1, true_peak_max_dbtp: -1}
+      "ATSC A/85": {target_lufs: -24, tolerance_lu: 2, true_peak_max_dbtp: -2}
+    # lra_max_lu: 20              # optional loudness-range limit
+  audio.silence:                  # dead zones in the program range, every audio stream
+    threshold_dbfs: -60           # frame is silent when all channels peak below this
+    max_run_frames: 12            # ~0.5 s at 24p
+  audio.silent_channel:
+    threshold_dbfs: -60           # channel peak below this for the whole program
+  audio.clipping:
+    clip_dbfs: -0.1               # per-frame sample peak at/above this = clipping
+    severity: fail
+  decode.errors:
+    max_lines: 20

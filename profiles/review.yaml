@@ -1,0 +1,19 @@
+# Review renders (internal / client review, dailies-style turnarounds). Fast idiot-check:
+# catches wrong settings and gross errors; naming and polish items are information only.
+profile_version: 1
+name: review
+extends: final
+description: Review renders - settings and gross errors gate; naming, captions and fine blanking do not.
+checks:
+  filename:
+    severity: info
+  captions.presence:
+    enabled: false
+  video.blanking:
+    severity: warn
+  audio.loudness:
+    severity: warn
+  video.black_runs:
+    max_black_run_frames: 24
+  audio.silence:
+    max_run_frames: 24

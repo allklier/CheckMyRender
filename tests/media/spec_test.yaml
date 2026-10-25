@@ -1,0 +1,42 @@
+# Spec for generated test media (tests/media/make_media.py): short program so tests stay fast.
+spec_version: 1
+job:
+  title: "SHOWNAME"
+  episode: "101"
+  version: "v03"
+  client: "Test"
+  naming_pattern: "{title}_{episode}_{format}_{fps_tag}_{audio_tag}_{version}.mov"
+video:
+  container: mov
+  codec: prores
+  codec_profile: "422 HQ"
+  width: 1920
+  height: 1080
+  fps: "24000/1001"
+  scan: progressive
+  pixel_format: yuv422p10le
+  color: {primaries: bt709, transfer: bt709, matrix: bt709, range: tv}
+  aspect_ratio: "16:9"
+  pixel_aspect: 1.0
+timing:
+  timecode_mode: non-drop
+  program_start_timecode: "01:00:00:00"
+  program_duration_frames: 48
+  head_layout:
+    - {type: slate, frames: 1}
+    - {type: black, frames: 23}
+    - {type: program}
+  tail_layout:
+    - {type: black, frames: 24}
+audio:
+  sample_rate: 48000
+  bit_depth: 24
+  codec: pcm_s24le
+  tracks:
+    - {index: 0, layout: stereo, content: "Stereo mix L/R"}
+    - {index: 1, layout: stereo, content: "M&E L/R"}
+  loudness:
+    standard: "EBU R128"
+    program_track: 0
+content:
+  captions: {required: true, formats: [embedded_608]}
