@@ -26,6 +26,7 @@ import jsonschema
 import yaml
 
 from .schemas import JOB_SCHEMA, SPEC_SCHEMA, PROFILE_SCHEMA
+from .textnorm import nfc
 
 
 
@@ -80,7 +81,7 @@ def _load_yaml(path: Path) -> tuple[dict, str]:
     except OSError as e:
         raise ConfigError(f"cannot read {path}: {e}") from e
     try:
-        data = yaml.safe_load(text)
+        data = nfc(yaml.safe_load(text))     # D32: spec/job strings compared in NFC
     except yaml.YAMLError as e:
         raise ConfigError(f"YAML error in {path}: {e}") from e
     if not isinstance(data, dict):

@@ -89,6 +89,10 @@ def make(outdir, name: str, **overrides) -> Path:
               f"drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='gte(n,{head + o['program']})'"]
     if o["vf_extra"]:
         vchain.append(o["vf_extra"])
+    if o["color"] == BASE["color"]:
+        # tag the frames as the output is tagged: ffmpeg >= 7 otherwise converts drawbox colours
+        # (ffmpeg 9.0.2: RGB 8 grey drew as Y 21 instead of 23); no change on ffmpeg 6.1/5.1
+        vchain.insert(0, "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv")
     cmd = ["ffmpeg", "-hide_banner", "-v", "error", "-y",
            "-f", "lavfi", "-i", f"testsrc2=s={o['width']}x{o['height']}:r={o['fps']}"]
     fc = [f"[0:v]{','.join(vchain)}[v]"]

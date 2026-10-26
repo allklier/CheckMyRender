@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Slated spot test media for the proposed slate checks (D27, Extreme Reach short form).
 
-    /usr/bin/python3 tests/slate/make_spot.py OUTDIR [--values FILE] [--short] [--defect NAME ...]
+    PY tests/slate/make_spot.py OUTDIR   (PY = a Python with numpy and Pillow) [--values FILE] [--short] [--defect NAME ...]
                                               [--layout aligned|label_colon]
 
 Default: OUTDIR/clean/<TITLE>.mov and OUTDIR/errors/<name>.mov (all ERRORS_SET defects).
@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import os
 import re
 import subprocess
 import sys
@@ -52,8 +53,29 @@ import yaml
 from PIL import Image, ImageDraw, ImageFont
 
 REPO = Path(__file__).resolve().parents[2]
-FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+# Fonts: $CMR_TEST_FONT / $CMR_TEST_FONT_REGULAR, else the first that exists: Linux DejaVu
+# (Debian/Ubuntu, Fedora, Rocky 9 DejaVuLGC), then macOS Arial (/System/Library/Fonts/Supplemental).
+# A different font gives a different slate picture, so OCR results are only comparable across
+# machines on byte-identical media (generate the slate media once and copy it; tests/CLAUDE.md).
+FONTS_BOLD = ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+              "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+              "/usr/share/fonts/dejavu-lgc-sans-fonts/DejaVuLGCSans-Bold.ttf",      # Rocky 9
+              "/System/Library/Fonts/Supplemental/Arial Bold.ttf")
+FONTS_REGULAR = ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                 "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+                 "/usr/share/fonts/dejavu-lgc-sans-fonts/DejaVuLGCSans.ttf",
+                 "/System/Library/Fonts/Supplemental/Arial.ttf")
+
+
+def find_font(env: str, candidates: tuple) -> str:
+    for f in ([os.environ[env]] if os.environ.get(env) else []) + list(candidates):
+        if Path(f).is_file():
+            return f
+    sys.exit(f"make_spot: no font found; set ${env} to a .ttf file (tried {', '.join(candidates)})")
+
+
+FONT = find_font("CMR_TEST_FONT", FONTS_BOLD)
+FONT_REGULAR = find_font("CMR_TEST_FONT_REGULAR", FONTS_REGULAR)
 W, H = 1920, 1080
 FPS_NUM, FPS_DEN, TC_FPS = 30000, 1001, 30          # NDF timecode counts 30 frames per second
 SR = 48000
@@ -324,6 +346,9 @@ def make(outdir, values, defects=(), short=False, subdir=None, now=None, layout=
            "-framerate", f"{FPS_NUM}/{FPS_DEN}", "-i", "pipe:0",
            "-f", "f32le", "-sample_rate", str(SR), "-ch_layout", "stereo", "-i", str(raw),
            "-map", "0:v", "-map", "1:a",
+           # tag the raw input as what it is (BT.709 limited): ffmpeg >= 7 converts untagged input
+           # to the output's -colorspace (ffmpeg 9.0.2 shifted the bars by up to 10 codes)
+           "-vf", "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv",
            "-c:v", "prores_ks", "-profile:v", "hq", "-pix_fmt", "yuv422p10le", "-bsf:v",
            "prores_metadata=color_primaries=bt709:color_trc=bt709:colorspace=bt709",
            "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",

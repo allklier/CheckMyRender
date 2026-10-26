@@ -23,10 +23,12 @@ tesseract ($CMR_TESSERACT or PATH).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -39,6 +41,25 @@ REPO = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO / "src"))
 import compare  # noqa: E402
+
+
+
+def run_group(cmd, fh, env, timeout) -> int:
+    """Run cmr in its own session (process group); on timeout the WHOLE group gets SIGTERM, then
+    SIGKILL after 10 s, so no ffmpeg child is left running (subprocess.run's timeout kills only
+    the direct child). Raises subprocess.TimeoutExpired after cleaning up."""
+    p = subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT, env=env, start_new_session=True)
+    try:
+        return p.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(p.pid, signal.SIGTERM)       # pgid == pid with start_new_session
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            p.wait(timeout=10)
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(p.pid, signal.SIGKILL)       # whatever of the group is still running
+        p.wait()
+        raise
 
 
 def load_yaml(p: Path):
@@ -134,6 +155,10 @@ def run_one(r: dict, args, suite: dict, suite_dir: Path, out_root: Path, expecte
     # the suite names spec/profile itself; a job file only when the run lists one (never a
     # job.yaml that happens to be in the current folder, D31)
     cmd += ["--job", str(suite_dir / r["job"])] if r.get("job") else ["--no-job"]
+    # reviewed findings: a run's `waivers:` file, else projects/<project>/waivers.yaml when it exists
+    wf = suite_dir / (r.get("waivers") or f"projects/{r.get('project')}/waivers.yaml")
+    if wf.exists():
+        cmd += ["--waivers", str(wf)]
     res["cmd"] = cmd
     if args.dry_run:
         res["verdict"] = "DRY"
@@ -145,9 +170,8 @@ def run_one(r: dict, args, suite: dict, suite_dir: Path, out_root: Path, expecte
         with open(log, "w") as fh:
             fh.write(" ".join(cmd) + "\n")
             fh.flush()
-            p = subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT, env=env,
-                               timeout=args.timeout or suite.get("defaults", {}).get("timeout_s", 1800))
-        res["exit"] = p.returncode
+            res["exit"] = run_group(cmd, fh, env,
+                                    args.timeout or suite.get("defaults", {}).get("timeout_s", 1800))
     except subprocess.TimeoutExpired:
         res.update(verdict="ERROR", secs=time.monotonic() - t0)
         res["notes"].append("timeout")

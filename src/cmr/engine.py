@@ -43,6 +43,7 @@ import os
 import pkgutil
 import re
 import shutil
+import sys
 import tempfile
 import time
 import traceback
@@ -259,8 +260,21 @@ class CheckContext:
 
 # --- single pass --------------------------------------------------------------------
 _SAFE_PATH = re.compile(r"^[A-Za-z0-9_./-]+$")
-_FILTER_LINE = re.compile(r"^ [T.][S.][C.] (\S+)\s+\S+->\S+")
+# `ffmpeg -filters` flag columns: 3 (T S C) in 5.1/6.1/7.1, 2 (T S) from 8.0 (8.0.1 and 9.0.2 checked)
+_FILTER_LINE = re.compile(r"^ [T.][S.][C.]? (\S+)\s+\S+->\S+")
 _COUNTER = "metadata=mode=add:key=cmr.frame:value=1"
+
+
+def _tap_tmp_base() -> str | None:
+    """Folder for the tap print files: the system temp dir (TMPDIR), unless its path holds
+    characters a filtergraph `file=` cannot take (e.g. a space): then /tmp, which exists on
+    Linux and macOS. None = tempfile's default."""
+    base = tempfile.gettempdir()
+    if _SAFE_PATH.match(base):
+        return None
+    LOG.warning("temp folder %s is unsafe for a filtergraph path; using /tmp for tap files",
+                log.redact("path", base))
+    return "/tmp"
 
 
 def available_filters(ffmpeg_bin: str = "ffmpeg") -> set[str]:
@@ -323,7 +337,12 @@ def default_filter_threads() -> int:
     """-filter_complex_threads default: half the CPUs, max 8. Measured (16-CPU box,
     1080p ProRes, blanking+black taps): 1 thread and 16 (= ffmpeg default, all CPUs)
     were slowest; 4-8 fastest (see src/cmr/CLAUDE.md). Override: run_file(filter_threads=N),
-    CLI --filter-threads N."""
+    CLI --filter-threads N. macOS (D32): Apple Silicon has no SMT, so the physical
+    performance cores take the place of "half the logical CPUs" (min(8, P cores)); efficiency
+    cores are left out. Falls back to the CPU rule when sysctl gives no perflevel0."""
+    pcores = log.performance_cores() if sys.platform == "darwin" else None
+    if pcores:
+        return max(1, min(8, pcores))
     return max(1, min(8, (os.cpu_count() or 2) // 2))
 
 
@@ -556,7 +575,8 @@ def run_file(path: Path, spec: dict, profile: dict, ffmpeg_bin="ffmpeg", ffprobe
     passinfo, raw_records = PassInfo(False), {}
     if all_taps or any("decode" in c.needs for c, _ in contexts):
         counter = ("__engine__/frames", Tap("frames", media.video[0]["index"], _COUNTER), "__engine__")
-        with tempfile.TemporaryDirectory(prefix="cmr_") as tmp, log.phase(LOG, "main pass"):
+        with tempfile.TemporaryDirectory(prefix="cmr_", dir=_tap_tmp_base()) as tmp, \
+                log.phase(LOG, "main pass"):
             try:
                 passinfo, raw_records = run_pass(media, all_taps + [counter], ffmpeg_bin, Path(tmp),
                                                  filter_threads)

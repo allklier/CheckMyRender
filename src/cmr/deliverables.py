@@ -31,6 +31,7 @@ from pathlib import Path
 
 from . import log
 from .config import ConfigError
+from .textnorm import nfc
 
 LOG = log.get("deliverables")
 
@@ -153,8 +154,8 @@ def load_rows(path, columns: dict | None = None) -> list[dict]:
     try:
         with open(path, newline="", encoding="utf-8-sig") as fh:
             reader = csv.DictReader(fh)
-            headers = reader.fieldnames or []
-            raw = list(reader)
+            headers = nfc(list(reader.fieldnames or []))     # D32: cells compared in NFC
+            raw = [{nfc(k): nfc(v) for k, v in r.items()} for r in reader]
     except OSError as e:
         raise ConfigError(f"cannot read deliverables CSV {path}: {e}") from e
     missing = [h for h in (columns or {}).values() if h not in headers]
@@ -175,7 +176,7 @@ def load_rows(path, columns: dict | None = None) -> list[dict]:
 def file_tokens(name: str, regex: str | None) -> tuple[dict, bool]:
     """{stem, name, ext} + named groups of `regex` (fullmatch on the file name).
     Returns (tokens, matched); matched is True when no regex is configured."""
-    p = Path(name)
+    p = Path(nfc(name))
     tok = {"name": p.name, "stem": p.stem, "ext": p.suffix.lstrip(".")}
     if not regex:
         return tok, True

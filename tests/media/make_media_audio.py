@@ -4,7 +4,8 @@
     make_multi(outdir, name, streams, container="mov")
 
 `streams` = one lavfi audio expression per MONO stream, written in order (e.g. 6 streams for
-L R C LFE Ls Rs + 2 for a stereo mix). Helpers: `tone(freq, peak_dbfs)` and `SILENT`. Picture
+L R C LFE Ls Rs + 2 for a stereo mix). Helpers: `tone(freq, peak_dbfs)`, `SILENT` and
+`gated(freq, peak_dbfs, [(a, b) file frames silent])`. Picture
 and timing follow tests/media/spec_test.yaml (make_media.BASE: 23.976p, head 1+23, program 48,
 tail 24, tmcd 00:59:59:00), so the program range is file frames 24..71. Audio is 48 kHz
 pcm_s24le, exactly 2002 samples per frame.
@@ -31,6 +32,13 @@ SILENT = "anullsrc=r=48000:cl=mono"
 
 def tone(freq: float, peak_dbfs: float) -> str:
     return f"sine=f={freq}:r=48000,volume={peak_dbfs + 18.0618:.4f}dB"
+
+
+def gated(freq: float, peak_dbfs: float, silent: list[tuple[int, int]]) -> str:
+    """`tone(freq, peak_dbfs)` with digital silence on the FILE frames a..b (inclusive) of each
+    range: chunks of exactly one frame (2002 samples at 23.976), `n` = file frame."""
+    off = "+".join(f"between(n,{a},{b})" for a, b in silent)
+    return f"{tone(freq, peak_dbfs)},asetnsamples=n=2002,volume=0:enable='{off}'"
 
 
 def make_multi(outdir, name: str, streams: list[str], container: str = "mov",

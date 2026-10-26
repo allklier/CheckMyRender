@@ -57,6 +57,7 @@ def late_surround():
 
 def spec_file(tmp_path, **audio):
     s = copy.deepcopy(SPEC)
+    s["audio"].pop("programs", None)            # this module uses the older spelling
     s["audio"]["loudness"] = {"standard": "ATSC A/85", "programs": PROGRAMS}
     s["audio"].update(audio)
     p = tmp_path / "spec.yaml"
@@ -86,7 +87,8 @@ def r128_independent(f, streams, layout, names):
 
 
 def loudness(findings):
-    return {x["evidence"][0].get("program"): x for x in findings if x["check_id"] == "audio.loudness"}
+    return {x["evidence"][0].get("program"): x for x in findings if x["check_id"] == "audio.loudness"
+            and x["evidence"][0].get("kind") != "undeclared_programs"}
 
 
 def test_51_and_stereo_programs_measured(master, tmp_path):
@@ -122,8 +124,17 @@ def info(findings, cid):
     return [x for x in findings if x["check_id"] == cid and x["severity"] == "INFO"]
 
 
+NO_PROGRAMS = {"standard": "ATSC A/85", "program_track": 0}
+
+
 def test_undeclared_silent_streams_fail(stereo_only, tmp_path):
-    f = run(tmp_path, stereo_only, spec_file(tmp_path))
+    # programs declared: judged per program; C Ls Rs dead for the whole program, LFE not judged,
+    # the 5.1 as a whole (L R carry sound) is not silent
+    f = run(tmp_path / "p", stereo_only, spec_file(tmp_path))
+    assert sorted(x["stream"] for x in problems(f, "audio.silent_channel")) == [3, 5, 6]
+    assert problems(f, "audio.silence") == []
+    # no programs (backward compatible): every mono stream on its own
+    f = run(tmp_path / "n", stereo_only, spec_file(tmp_path, loudness=NO_PROGRAMS))
     assert sorted(x["stream"] for x in problems(f, "audio.silent_channel")) == [3, 4, 5, 6]
     assert sorted(x["stream"] for x in problems(f, "audio.silence")) == [3, 4, 5, 6]
 
@@ -132,22 +143,32 @@ def test_declared_silent_streams_are_info(stereo_only, tmp_path):
     spec = spec_file(tmp_path, allowed_silence=[{"stream": s} for s in (2, 3, 4, 5)])
     f = run(tmp_path, stereo_only, spec)
     assert problems(f, "audio.silent_channel") == [] and problems(f, "audio.silence") == []
-    assert sorted(x["stream"] for x in info(f, "audio.silent_channel")) == [3, 4, 5, 6]
+    assert sorted(x["stream"] for x in info(f, "audio.silent_channel")) == [3, 5, 6]   # LFE not judged
+    assert info(f, "audio.silence") == []           # per program: the 5.1 was never silent
+    f = run(tmp_path / "n", stereo_only, spec_file(tmp_path, loudness=NO_PROGRAMS,
+                                                   allowed_silence=[{"stream": s} for s in (2, 3, 4, 5)]))
+    assert problems(f, "audio.silent_channel") == [] and problems(f, "audio.silence") == []
     assert all(x["evidence"][0]["kind"] == "declared_silence" for x in info(f, "audio.silence"))
     assert len(info(f, "audio.silence")) == 4
 
 
 def test_declared_time_range(late_surround, tmp_path):
-    f = run(tmp_path / "u", late_surround, spec_file(tmp_path))
+    # per program: surrounds silent while L R carry sound is no program silence
+    f = run(tmp_path / "p", late_surround, spec_file(tmp_path))
+    assert problems(f, "audio.silence") == [] and problems(f, "audio.silent_channel") == []
+    # per stream (no programs, backward compatible): the declarations below matter
+    f = run(tmp_path / "u", late_surround, spec_file(tmp_path, loudness=NO_PROGRAMS))
     assert sorted((x["stream"], x["frame_start"], x["frame_end"]) for x in problems(f, "audio.silence")) == \
         [(s, 24, 47) for s in (3, 4, 5, 6)]
     assert problems(f, "audio.silent_channel") == []
-    spec = spec_file(tmp_path, allowed_silence=[{"stream": s, "channels": [1], "start": "01:00:00:00",
-                                                 "end": "01:00:00:23"} for s in (2, 3, 4, 5)])
+    spec = spec_file(tmp_path, loudness=NO_PROGRAMS,
+                     allowed_silence=[{"stream": s, "channels": [1], "start": "01:00:00:00",
+                                       "end": "01:00:00:23"} for s in (2, 3, 4, 5)])
     f = run(tmp_path / "d", late_surround, spec)
     assert problems(f, "audio.silence") == [] and len(info(f, "audio.silence")) == 4
     # a range that ends too early leaves the rest of the gap reported
-    spec = spec_file(tmp_path, allowed_silence=[{"stream": 2, "start": "01:00:00:00", "end": "01:00:00:05"}])
+    spec = spec_file(tmp_path, loudness=NO_PROGRAMS,
+                     allowed_silence=[{"stream": 2, "start": "01:00:00:00", "end": "01:00:00:05"}])
     f = run(tmp_path / "e", late_surround, spec)
     assert (3, 30, 47) in [(x["stream"], x["frame_start"], x["frame_end"]) for x in problems(f, "audio.silence")]
 
@@ -155,6 +176,7 @@ def test_declared_time_range(late_surround, tmp_path):
 def test_channel_count_mismatch_is_config_error(master, tmp_path):
     _, f = master
     s = copy.deepcopy(SPEC)
+    s["audio"].pop("programs", None)
     s["audio"]["loudness"] = {"standard": "ATSC A/85",
                               "programs": [{"streams": [0, 1, 2], "channels": ["L", "R"]}]}
     p = tmp_path / "bad.yaml"

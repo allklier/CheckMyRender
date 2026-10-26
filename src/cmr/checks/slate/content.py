@@ -54,7 +54,7 @@ class SlateContent(SlateCheck):
             return err
         job = ctx.params.get("job") or {}
         cfg = ctx.params.get("deliverables") or {}
-        name = ctx.media.path.name
+        name = ctx.media.name
         out = []
         if cfg.get("csv") or cfg.get("row"):
             sel = dl.select(cfg, job, name, ctx.params.get("tags"))   # ConfigError -> ERROR
@@ -111,9 +111,9 @@ class SlateContent(SlateCheck):
                                  f"{read.min_conf} < {thr}) does not match {exp!r}; check by eye",
                                  field, text, self.sev(ctx, "uncertain_severity"),
                                  expected=exp, actual=text, **ev)]
-        if field == "TITLE" and exp == ctx.media.path.stem:
+        if field == "TITLE" and exp == ctx.media.stem:
             msg = (f"wrong slate or renamed file: slate TITLE {text!r} does not match the filename "
-                   f"{ctx.media.path.name!r}")
+                   f"{ctx.media.name!r}")
         elif ftype == "id":
             msg = f"slate does not match the file: slate {field} {text!r}, expected {exp!r}"
         else:

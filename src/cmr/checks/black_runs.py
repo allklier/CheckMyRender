@@ -20,7 +20,8 @@ threshold, so 1-2 px text strokes count):
   lutyuv=y='if(gt(val,minval+(T-16)*(maxval-minval)/219),maxval,minval)',
   scale=iw/4:ih/4:flags=area+accurate_rnd,format=yuv420p,signalstats   -> YAVG
 The mask is maxval/minval of the input's own range (lutyuv: 940/64 for 10-bit tv, 255/0 for
-yuvj/gray; measured), format=yuv420p maps both to 16/235, and area scaling keeps the mean, so
+yuvj/gray; measured), scale out_range=tv + format=yuv420p maps both to 16/235 (explicit since
+ffmpeg 7.1, which keeps full range otherwise), and area scaling keeps the mean, so
 bright fraction = (YAVG - 16) / 219 for any input format (measured exact on yuvj420p, yuv420p,
 yuv422p10le, yuv444p12le: 1/32 box -> YAVG 22.8438). T = `content_luma` (8-bit tv code).
 A dark frame whose bright fraction >= `content_min_fraction` is content, not black. Raw dark
@@ -42,8 +43,10 @@ from cmr.model import Candidate, Severity
 LOG = log.get("video.black_runs")
 KEY = "lavfi.signalstats.YHIGH"
 AVG = "lavfi.signalstats.YAVG"
-CHAINS = {"high": "format=yuv420p,signalstats",
-          "fast": "scale=iw/4:ih/4:flags=area+accurate_rnd,format=yuv420p,signalstats"}
+# out_range=tv: ffmpeg 7.1 no longer maps full range (yuvj*/pc) to tv in a plain
+# format=yuv420p conversion (5.1/6.1 did); thresholds are tv codes (ffmpeg 7.1 test, root D10)
+CHAINS = {"high": "scale=out_range=tv,format=yuv420p,signalstats",
+          "fast": "scale=iw/4:ih/4:flags=area+accurate_rnd:out_range=tv,format=yuv420p,signalstats"}
 BLACK_LUMA = 24            # 8-bit code value; tv black = 16
 CONTENT_LUMA = 100         # 8-bit tv code: a pixel above this is picture content (logo/text)
 CONTENT_MIN_FRACTION = 0.0001   # 0.01% of the frame (207 px at 1080p); one hot pixel is 0.00005%
@@ -53,7 +56,7 @@ CONTENT_KIND = "content_on_black"
 def bright_chain(content_luma: float) -> str:
     t = f"minval+({content_luma}-16)*(maxval-minval)/219"
     return (f"lutyuv=y='if(gt(val,{t}),maxval,minval)',"
-            "scale=iw/4:ih/4:flags=area+accurate_rnd,format=yuv420p,signalstats")
+            "scale=iw/4:ih/4:flags=area+accurate_rnd:out_range=tv,format=yuv420p,signalstats")
 
 
 def runs(frames) -> list[tuple[int, int]]:

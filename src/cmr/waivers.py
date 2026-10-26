@@ -3,13 +3,22 @@
 A waiver = check id + stream (+ edge/kind/channel from the finding evidence) + frame range +
 a PERCEPTUAL fingerprint of the evidence, computed after the main pass by seeking to a
 bounded number of evenly spaced frames of the range (first and last included):
-- video: dHash, 64 bits per frame (grayscale 9x8 area downscale, bit = left > right
+- video: dHash, 64 bits per frame (9x8 cell means of the luma plane, bit = left > right
   neighbour). Distance = max Hamming distance over the sampled frames.
+  v2 (current): ffmpeg only decodes and extracts the luma plane in native bit depth
+  (`extractplanes=y`; RGB sources: R, G, B planes stacked, BT.709 luma from the cell sums;
+  no scale, no format conversion); the 9x8 box means and the hash are computed here
+  (`luma_dhash`), so the hash does not depend on the ffmpeg build (measured identical on
+  6.1.1 / 7.1.1 / 9.0.2). v1 (`scale=9:8:flags=area+accurate_rnd,format=gray`) depends on the
+  swscale build (dim content differs between ffmpeg 6.1 and 7.1+); kept only to match
+  waivers written with it (re-creating such a waiver upgrades it to v2).
 - audio: per sampled frame and channel, sample peak and RMS in dBFS (0.1 dB, floor -90).
   Distance = max absolute dB difference. Why: the audio checks judge levels (clipping,
   silence, dead channel, true peak), so a level envelope is what must stay the same;
   it survives re-encodes and resampling-free re-renders, a remix or gain change shows.
-  A change of timbre at the same level is not seen.
+  A change of timbre at the same level is not seen. PCM envelopes are identical across
+  ffmpeg 6.1.1 / 7.1.1 / 9.0.2; AAC is not (seek + decoder pre-roll differ, up to 1.6 dB
+  measured, inside the 2 dB tolerance; documented, not fixed).
 Matching (same location only; moved content = roadmap): a finding of the same check, stream
 and locator whose range lies inside the waiver range +- margin is fingerprinted at the
 WAIVER's frames; distance <= tolerance -> WAIVED (severity lowered to PASS, raw_severity
@@ -28,6 +37,7 @@ from __future__ import annotations
 import datetime
 import logging
 import math
+import sys
 from array import array
 from fractions import Fraction
 from pathlib import Path
@@ -37,6 +47,7 @@ import yaml
 
 from . import log
 from .config import ConfigError
+from .textnorm import nfc
 from .media import probe
 from .model import Finding, Severity
 
@@ -49,10 +60,14 @@ VIDEO_SAMPLES, AUDIO_SAMPLES = 8, 16
 FLOOR_DB = -90.0
 ANY_JOB = "*"                # `job: "*"`: a deliberate cross-job waiver (D31)
 LOCATOR_KEYS = ("edge", "kind", "channel")     # evidence keys that are part of the location
-ALGO = {"video": ("video_dhash", "dhash64-gray9x8-area", 1),
+ALGO = {"video": ("video_dhash", "dhash64-luma9x8-box", 2),
         "audio": ("audio_envelope", "peak-rms-dbfs-0.1db", 1),
         "slate": ("slate_text", "field-exact-text", 1)}
+VIDEO_V1 = ("video_dhash", "dhash64-gray9x8-area", 1)   # build-dependent, matching old waivers only
+V1_NOTE = ("fingerprint v1 (depends on the ffmpeg build); re-create the waiver to upgrade it "
+           "to v2")
 TEXT_TYPE = ALGO["slate"][0]
+_RGB_PREFIXES = ("rgb", "bgr", "gbr", "argb", "abgr", "0rgb", "0bgr", "x2rgb", "x2bgr")
 LOG = log.get("waivers")
 
 
@@ -95,6 +110,85 @@ def dhash(px: bytes, w: int = 9, h: int = 8) -> str:
     return f"{v:016x}"
 
 
+def cell_edges(n: int, cells: int) -> list[int]:
+    """Cell boundaries 0 = e[0] < ... < e[cells] = n, e[i] = i * n // cells (integer floor);
+    cell i covers samples e[i] .. e[i+1]-1. Needs n >= cells (every cell non-empty)."""
+    return [i * n // cells for i in range(cells + 1)]
+
+
+RGB_WEIGHTS = (2126, 7152, 722)    # BT.709 luma x 10000, for RGB sources (R, G, B planes)
+
+
+def luma_cells(raw: bytes, w: int, h: int, depth: int, big_endian: bool = False,
+               rgb: bool = False) -> list[int]:
+    """9x8 box means (row-major, 72 values) of the luma, normalised to 8-bit codes, in integer
+    arithmetic: mean8 = round_half_up(sum / (count * 2**(depth-8))), so an 8-bit and a 10-bit
+    encode of the same picture give the same codes (the 8-bit step is the dead zone that keeps
+    grain on flat areas from flipping bits, as in v1). `raw` = one plane (Y) or, with `rgb`,
+    the R, G and B planes stacked (3*h rows); RGB luma = BT.709 weights applied to the cell
+    SUMS (a box mean is linear, so no per-pixel work). Samples are 1 byte (depth 8) or 2 bytes
+    (9..16 bit, little-endian unless `big_endian`). Cell edges: cell_edges()."""
+    if w < 9 or h < 8 or not 8 <= depth <= 16:
+        raise FingerprintError(f"plane {w}x{h} at {depth} bit not supported")
+    bps, planes = 1 if depth == 8 else 2, 3 if rgb else 1
+    if len(raw) != w * h * bps * planes:
+        raise FingerprintError(f"got {len(raw)} bytes, expected {w * h * bps * planes} "
+                               f"({w}x{h}, {depth} bit, {planes} plane(s))")
+    if bps == 1:
+        px = memoryview(raw)
+    elif big_endian or sys.byteorder != "little":
+        a = array("H")
+        a.frombytes(raw)
+        if big_endian != (sys.byteorder != "little"):
+            a.byteswap()
+        px = memoryview(a)
+    else:
+        px = memoryview(raw).cast("H")
+    xs, ys = cell_edges(w, 9), cell_edges(h, 8)
+    weights, scale = (RGB_WEIGHTS, 10000) if rgb else ((1,), 1)
+    out = []
+    for r in range(8):
+        sums = [0] * 9
+        for p, wt in enumerate(weights):
+            for y in range(ys[r], ys[r + 1]):
+                base = (p * h + y) * w
+                for c in range(9):
+                    sums[c] += wt * sum(px[base + xs[c]:base + xs[c + 1]])
+        for c in range(9):
+            q = scale * (xs[c + 1] - xs[c]) * (ys[r + 1] - ys[r]) << (depth - 8)
+            out.append((2 * sums[c] + q) // (2 * q))
+    return out
+
+
+def luma_dhash(raw: bytes, w: int, h: int, depth: int, big_endian: bool = False,
+               rgb: bool = False) -> str:
+    return dhash(luma_cells(raw, w, h, depth, big_endian, rgb))
+
+
+_DEPTHS: dict[str, dict[str, int]] = {}
+
+
+def pix_fmt_depths(ffmpeg: str) -> dict[str, int]:
+    """pix_fmt -> bit depth of its first component, from `ffmpeg -pix_fmts` (columns FLAGS NAME
+    NB_COMPONENTS BITS_PER_PIXEL BIT_DEPTHS, e.g. `IO... yuv420p10le 3 15 10-10-10`)."""
+    if ffmpeg not in _DEPTHS:
+        out = _ffmpeg(ffmpeg, ["-pix_fmts"]).decode(errors="replace")
+        d = {}
+        for line in out.split("-----", 1)[-1].splitlines():
+            p = line.split()
+            if len(p) == 5 and p[2].isdigit() and p[4].split("-")[0].isdigit():
+                d[p[1]] = int(p[4].split("-")[0])
+        _DEPTHS[ffmpeg] = d
+    return _DEPTHS[ffmpeg]
+
+
+def plane_for(pix_fmt: str) -> str:
+    """`y` (the luma plane) for Y'CbCr / gray formats; `rgb` for RGB formats (no Y plane: the
+    R, G, B planes are extracted and stacked, luma = BT.709 weights on the cell sums). No
+    scale or format conversion either way, so no build dependency."""
+    return "rgb" if pix_fmt.startswith(_RGB_PREFIXES) else "y"
+
+
 def _db(x: float) -> float:
     return FLOOR_DB if x <= 0 else max(FLOOR_DB, round(20 * math.log10(x), 1))
 
@@ -113,21 +207,65 @@ class Fingerprinter:
     def __init__(self, path, fps: Fraction | str, ffmpeg: str = "ffmpeg", ffprobe: str = "ffprobe"):
         self.path, self.fps = Path(path), Fraction(fps)
         self.ffmpeg, self.ffprobe, self._media = ffmpeg, ffprobe, None
+        self._plane: dict[int, tuple | None] = {}
+        self._version: str | None = None
 
     def _channels(self, stream: int) -> int:
-        if self._media is None:
-            self._media = probe(self.path, self.ffprobe)
-        for s in self._media.audio:
+        for s in self._probe().audio:
             if s["index"] == stream and s.get("channels"):
                 return int(s["channels"])
         raise FingerprintError(f"stream {stream} is not an audio stream with channels")
 
-    def video_frame(self, stream: int, frame: int) -> str:
+    def _probe(self):
+        if self._media is None:
+            self._media = probe(self.path, self.ffprobe)
+        return self._media
+
+    def video_plane(self, stream: int) -> tuple[str, int, bool, int, int] | None:
+        """(plane, depth, big-endian, width, height) for the v2 hash, or None when the stream's
+        pixel format has no 8..16-bit integer plane to hash (float, bayer, unknown)."""
+        if stream not in self._plane:
+            s = next((v for v in self._probe().video if v["index"] == stream), None)
+            if s is None:
+                raise FingerprintError(f"stream {stream} is not a video stream")
+            pf = s.get("pixel_format_raw") or "unknown"
+            depth = pix_fmt_depths(self.ffmpeg).get(pf)
+            ok = depth is not None and 8 <= depth <= 16 and s.get("width") and s.get("height")
+            self._plane[stream] = (plane_for(pf), depth, pf.endswith("be"), int(s["width"]),
+                                   int(s["height"])) if ok else None
+            if not ok:
+                LOG.warning("stream %s: pixel format %s (%s bit) not supported by the v2 video "
+                            "fingerprint; using v1 (depends on the ffmpeg build)", stream, pf, depth)
+        return self._plane[stream]
+
+    def _seek(self, frame: int) -> list[str]:
         # seek half a frame early: accurate seek drops frames before -ss, so frame `frame` is
         # the first one out (verified against a full decode, src/cmr/CLAUDE.md)
         t = max(Fraction(0), (frame - Fraction(1, 2)) / self.fps)
-        px = _ffmpeg(self.ffmpeg, ["-ss", f"{float(t):.6f}", "-i", str(self.path),
-                                   "-map", f"0:{stream}", "-frames:v", "1",
+        return ["-ss", f"{float(t):.6f}", "-i", str(self.path)]
+
+    def video_frame(self, stream: int, frame: int) -> str:
+        """v2: the decoded plane in native size and depth (`extractplanes`, `ffmpeg -h
+        filter=extractplanes`: planes y/u/v/r/g/b/a; rawvideo keeps the plane's own pixel
+        format gray/gray10le/..., verified by byte count and values), hashed in luma_dhash."""
+        plane, depth, be, w, h = self.video_plane(stream)
+        # RGB: three plane outputs stacked into one frame (`ffmpeg -h filter=vstack`: inputs)
+        vf = ("extractplanes=r+g+b[r][g][b];[r][g][b]vstack=inputs=3" if plane == "rgb"
+              else "extractplanes=y")
+        raw = _ffmpeg(self.ffmpeg, [*self._seek(frame), "-map", f"0:{stream}", "-frames:v", "1",
+                                    "-vf", vf, "-f", "rawvideo", "-"])
+        try:
+            return luma_dhash(raw, w, h, depth, big_endian=be, rgb=plane == "rgb")
+        except FingerprintError as e:
+            raise FingerprintError(f"frame {frame}: {e}") from None
+
+    def video_frame_v1(self, stream: int, frame: int) -> str:
+        """v1 (build-dependent swscale downscale): only to match waivers written with it.
+        The chain is exactly the one v1 waivers were written with (commit 6212131). A variant
+        via `format=yuv444p` reproduced 6.1.1 on 10-bit dim stripes under 7.1/9.0 but read
+        8-bit dim stripes as black on every build (6.1.1 included) and moved dark pictures by
+        3-4 bits, so it was not kept (measured, src/cmr/CLAUDE.md Waivers)."""
+        px = _ffmpeg(self.ffmpeg, [*self._seek(frame), "-map", f"0:{stream}", "-frames:v", "1",
                                    "-vf", "scale=9:8:flags=area+accurate_rnd,format=gray",
                                    "-f", "rawvideo", "-"])
         if len(px) != 72:
@@ -149,12 +287,33 @@ class Fingerprinter:
             out.append([_db(max(abs(v) for v in x)), _db(math.sqrt(sum(v * v for v in x) / len(x)))])
         return out
 
-    def fingerprint(self, check_id: str, stream: int, frames: list[int]) -> dict:
+    def fingerprint(self, check_id: str, stream: int, frames: list[int],
+                    version: int | None = None) -> dict:
+        """`version` = the waiver's fingerprint version when matching (video 1 recomputes with
+        the v1 chain); None = current algorithm (v2, or v1 when the pixel format has no
+        integer plane). Video fingerprints also record `ffmpeg` (version line, informational:
+        not compared)."""
         kind = media_kind(check_id)
         typ, algo, ver = ALGO[kind]
-        fn = self.video_frame if kind == "video" else self.audio_frame
+        fn, extra = self.audio_frame, {}
+        if kind == "video":
+            plane = None if version == 1 else self.video_plane(stream)
+            if plane is None and version not in (None, 1):
+                raise FingerprintError(f"stream {stream}: pixel format not supported by the "
+                                       f"v{version} video fingerprint")
+            if plane is None:
+                (typ, algo, ver), fn = VIDEO_V1, self.video_frame_v1
+            else:
+                fn, extra = self.video_frame, {"plane": plane[0]}
+            extra["ffmpeg"] = self.ffmpeg_version()
         return {"type": typ, "algorithm": algo, "version": ver, "frames": list(frames),
-                "values": [fn(stream, f) for f in frames]}
+                "values": [fn(stream, f) for f in frames], **extra}
+
+    def ffmpeg_version(self) -> str:
+        if self._version is None:
+            out = _ffmpeg(self.ffmpeg, ["-version"]).decode(errors="replace").splitlines()
+            self._version = out[0].strip() if out else "unknown"
+        return self._version
 
     def for_range(self, check_id: str, stream: int, a: int, b: int) -> dict:
         n = VIDEO_SAMPLES if media_kind(check_id) == "video" else AUDIO_SAMPLES
@@ -173,10 +332,12 @@ def text_fingerprint(evidence: list | None) -> dict:
 
 def distance(a: dict, b: dict) -> float | None:
     """None = not comparable (other type/algorithm/version or frames)."""
+    # informational keys are not compared: `ffmpeg` (build that made it) and `plane` (v2
+    # video: y, or rgb = BT.709 luma from R G B; both are luma, so they stay comparable)
     if any(a.get(k) != b.get(k) for k in ("type", "algorithm", "version", "frames")):
         return None
     if a["type"] == TEXT_TYPE:
-        return 0 if a["values"] == b["values"] else 1
+        return 0 if nfc(a["values"]) == nfc(b["values"]) else 1     # D32: NFC (waiver YAML edited on a Mac)
     if a["type"] == "video_dhash":
         return max((bin(int(x, 16) ^ int(y, 16)).count("1") for x, y in zip(a["values"], b["values"])),
                    default=0)
@@ -358,6 +519,15 @@ def _count(state: dict, wid: str) -> None:
     c[wid] = c.get(wid, 0) + 1
 
 
+def _legacy(w: dict) -> dict:
+    """Report keys for a waiver with a v1 video fingerprint (build-dependent): the report says
+    so, `fingerprint_note` tells how to upgrade."""
+    fp = w.get("fingerprint") or {}
+    if fp.get("type") == VIDEO_V1[0] and fp.get("version") == VIDEO_V1[2]:
+        return {"fingerprint_version": 1, "fingerprint_note": V1_NOTE}
+    return {}
+
+
 def apply(findings: list[Finding], waivers: list[dict], current: Callable[[dict], dict],
           s: dict, today: datetime.date, state: dict) -> None:
     """Mark findings WAIVED / content-changed. `current(w)` fingerprints the checked file at
@@ -390,7 +560,7 @@ def apply(findings: list[Finding], waivers: list[dict], current: Callable[[dict]
                 state.setdefault(w["id"], set()).add("applied")
                 f.waiver_ref = w["id"]
                 f.waiver = {"id": w["id"], "status": "waived", "reason": w["reason"],
-                            "distance": d, "tolerance": tol}
+                            "distance": d, "tolerance": tol, **_legacy(w)}
                 f.lower_to(Severity.PASS)
                 _count(state, w["id"])
                 LOG.debug("%s waived %s frames %s-%s (distance %s <= %s)", w["id"], f.check_id,
@@ -405,7 +575,8 @@ def apply(findings: list[Finding], waivers: list[dict], current: Callable[[dict]
                 w, d, tol = changed[0]
                 f.waiver = {"id": w["id"], "status": "content_changed", "reason": w["reason"],
                             "distance": d, "tolerance": tol,
-                            "note": f"previously waived ({w['id']}), content changed - re-review"}
+                            "note": f"previously waived ({w['id']}), content changed - re-review",
+                            **_legacy(w)}
     for f in findings:
         if f.waiver_ref or f.severity not in (Severity.INFO, Severity.WARN, Severity.FAIL):
             continue

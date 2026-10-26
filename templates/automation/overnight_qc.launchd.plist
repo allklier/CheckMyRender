@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  overnight_qc.launchd.plist - macOS LaunchAgent that runs overnight_qc.sh every evening (D32).
+  macOS uses launchd instead of cron. A LaunchAgent runs as you, only while you are logged in
+  (a Mac at the login window runs no LaunchAgents).
+
+  1. Copy this file to ~/Library/LaunchAgents/com.example.cmr.overnight.plist (the file name
+     should match the Label below; use your own reverse-DNS prefix instead of com.example).
+  2. Replace every /Users/YOU/... path. launchd does NOT expand ~ or $HOME: write full paths.
+     PATH must contain the folder with `cmr` (the installer's launcher) or set CMR to its full
+     path; /usr/bin and /bin are needed for caffeinate, perl, find, sort.
+  3. Load it:      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.cmr.overnight.plist
+     Run it now:   launchctl kickstart gui/$(id -u)/com.example.cmr.overnight
+     Status:       launchctl print gui/$(id -u)/com.example.cmr.overnight
+     Remove:       launchctl bootout gui/$(id -u)/com.example.cmr.overnight
+     (after editing the plist: bootout, then bootstrap again)
+
+  Sleep: `caffeinate -i COMMAND` keeps the Mac from idle-sleeping while COMMAND runs and lets it
+  sleep again afterwards (the display may still turn off). A Mac that is already asleep at the
+  start time does not wake up for it: schedule a wake in System Settings > Energy (or `pmset
+  repeat`, needs admin) or leave the Mac awake.
+  Background: overnight_qc.sh runs cmr in background mode (the mode option, see the guide) =
+  nice 15 and 2 ffmpeg filter threads; on macOS there is NO memory cap (D32). The plist sets no ProcessType/LowPriorityIO,
+  because Darwin background throttling would slow the run far more than nice does.
+  Permissions (TCC): the first run that reads renders on an external or network volume
+  (/Volumes/...) or in Desktop/Documents/Downloads may need a one-time permission prompt for
+  the program launchd starts (bash) - accept it, or grant it under System Settings > Privacy &
+  Security (Files and Folders / Network Volumes / Full Disk Access). Without it the run fails
+  with "Operation not permitted" in the log below.
+  Output: StandardOutPath/StandardErrorPath (the folder must exist; ~/Library/Logs/cmr is where
+  cmr's own log lives too).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.example.cmr.overnight</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-i</string>
+        <string>/bin/bash</string>
+        <string>/Users/YOU/cmr/templates/automation/overnight_qc.sh</string>
+        <string>/Volumes/Renders/show_104</string>        <!-- RENDER_DIR -->
+        <string>/Users/YOU/qc_reports/show_104</string>  <!-- REPORT_DIR -->
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/YOU/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>CMR_JOB</key>
+        <string>/Users/YOU/qc/jobs/show_104/job.yaml</string>
+        <key>CMR_TIMEOUT</key>
+        <string>6h</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/YOU</string>
+
+    <!-- every day at 20:00 (local time); several times: an <array> of such dicts -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>20</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOU/Library/Logs/cmr/overnight.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOU/Library/Logs/cmr/overnight.log</string>
+</dict>
+</plist>

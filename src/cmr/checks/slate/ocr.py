@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from cmr import log
+from cmr.textnorm import nfc
 from .template import Template, norm_label
 
 LOG = log.get("slate")
@@ -97,7 +98,7 @@ def parse_tsv(text: str) -> list[Word]:
         conf = float(f.get("conf", -1))
         if not re.search(r"[A-Za-z0-9]", f["text"]) and conf < JUNK_CONF:
             continue
-        out.append(Word(f["text"].strip(), conf, int(f["left"]), int(f["top"]),
+        out.append(Word(nfc(f["text"].strip()), conf, int(f["left"]), int(f["top"]),
                         int(f["width"]), int(f["height"])))
     return out
 

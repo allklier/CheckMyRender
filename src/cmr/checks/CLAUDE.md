@@ -170,6 +170,59 @@ black (YHIGH threshold may need tuning); a frame missing from the signalstats ou
   channel that is silent everywhere else still FAILs. Declared channels that carry sound are
   not reported (no "should be silent" check). The silence checks measure the program only, so
   a silent head needs no declaration.
+- Programs (2026-10-26; tests `tests/unit/test_audio_program_silence.py`,
+  `tests/test_audio_program_media.py`): spec `audio.programs: [{name, streams, channels}]` is
+  THE place programs are declared (same entry format as above); `audio.loudness.programs` is
+  the older spelling and still works; both present and different = config error (equal is
+  fine); programs + `program_track` = config error. Shared code: `declared_programs` (reads
+  param `audio` = `${spec.audio}` and param `loudness`), `resolve_programs` (-> per merged
+  channel `(stream, channel, role)`). final.yaml passes `audio: "${spec.audio}"` to all four
+  audio content checks. Why: a PBS-style master (8 mono streams, 5.1 + stereo) gave 1,178
+  silence FAILs per mono stream (surrounds are silent for long stretches) and a loudness of one
+  mono stream.
+  - audio.silence with programs: a PROGRAM is silent in a frame when ALL its measured channels
+    (LFE and `-` excluded) are < threshold at once; a run > max_run_frames = ONE finding per
+    program, stream = the program's first stream, message `program 5.1 (L(1) R(2) C(3) Ls(5)
+    Rs(6)): silence N frames ...` (role(file stream index); `role(s.c)` for multi-channel
+    streams), evidence `program`, `streams`, `roles`, `label`. allowed_silence works per
+    channel as before (declared channels leave the per-frame test; INFO `declared_silence`
+    per program). Streams in NO program are still judged per stream, and a file without
+    programs is judged per stream exactly as before (backward compatible).
+  - audio.silent_channel with programs: per channel by role, `-` never, LFE only with profile
+    `include_lfe: true` (final: false); whole-program silence only (partial silence of a
+    surround is not reported); finding stream = the channel's stream, evidence `channel`
+    (1-based in the stream, waiver locator as before) + `role` + `program`; message `program
+    5.1 channel Rs (stream 6): silent for the whole program ...`. A stream in two programs is
+    judged once. Declared whole-program INFO carries `roles`.
+  - audio.clipping: unchanged per stream; with programs the message and evidence (`roles`,
+    e.g. `5.1 C`) name program and role. A program declaration that does not resolve (stream
+    missing, bad channels) only logs a WARN there; silence/silent_channel SKIP / ERROR like
+    loudness.
+  - audio.loudness: one finding set per program (as before). Without programs and with more
+    than one audio stream: one extra finding `kind: undeclared_programs` at
+    `undeclared_programs_severity` (info|warn, final: warn) "N audio streams but no programs
+    declared: loudness measured only audio stream T ...; declare audio.programs". An explicit
+    `program_track` in the spec counts as declaring the program (user decision, 2026-10-26): the
+    notice fires only when NEITHER `audio.programs` / `audio.loudness.programs` NOR
+    `program_track` is given and the file has more than one audio stream.
+  - audio.silence two tiers (user decision; tests `tests/unit/test_audio_program_silence.py`,
+    `tests/test_audio_program_media.py`): optional param `warn_run_frames` (integer >= 0). When
+    set and < `max_run_frames`: a silent run > warn and <= max is a WARN ("please listen",
+    evidence[0] `tier: warn`, severity min(WARN, profile severity)); a run > max keeps the
+    profile `severity` (default FAIL, `tier: limit`). Messages name the tier and both limits.
+    Absent or >= max = the single tier as before (no `tier` key). Works per program and per stream;
+    the declared_silence INFO now triggers above the lower limit. `broadcast_master` sets
+    warn 6 / max 30 (FAIL from 31 frames, about 1 s); `release` keeps its single 6-frame limit.
+  - Real master (PBS-style, 58 min 1080i 29.97, 8 mono PCM streams, Rocky machine, ffmpeg
+    5.1.10, audio-only wrapper of broadcast_master: max_run_frames 6): per-stream before =
+    1,178 silence FAILs; per program now 24 (5.1: 11, stereo: 13; program-wide dips of 7-55
+    frames, mostly at the same frames in both programs), no silent channel, no clipping.
+    Loudness 5.1 I -23.6 LUFS / LRA 5.8 / TP -1.993 dBTP (FAIL vs -2 by 0.007 dB), stereo
+    -23.6 / 5.9 / -2.8. Wall 5:32 (ffmpeg pass ~5 min, decode of the video included), max RSS
+    1.7 GB (records of three identical astats taps x 8 streams x 104k frames).
+  - Limit: ebur128 prints the running true peak LINEAR with 3 decimals, so near -2 dBTP one step
+    is ~0.011 dB (0.794 = -2.004, 0.795 = -1.993); a reading within one step of the ceiling is
+    at the resolution limit (UNVERIFIED which side the true value is on).
 - audio.silence / silent_channel / clipping: tap per audio stream
   `atrim,asetnsamples=n=floor(sr/fps):p=0,astats=metadata=1:reset=1:measure_perchannel=Peak_level:measure_overall=none`
   -> per-frame per-channel sample peak. Frame of chunk k = floor((start + k*n)*fps/sr) from
@@ -365,8 +418,8 @@ smaller (UNVERIFIED, no real renders here).
   the check off in the profile (`timing.timecode_start: {enabled: false}`) instead of changing the check.
 
 ## Known problems and limits
-- Mono-per-channel streams are merged for loudness only (`audio.loudness.programs`); audio.layout
-  does not merge them; layouts other than mono/stereo/5.1/7.1 -> SKIPPED there.
+- Mono-per-channel streams are merged for loudness and judged together by silence /
+  silent_channel when the spec declares `audio.programs`; audio.layout does not merge them; layouts other than mono/stereo/5.1/7.1 -> SKIPPED there.
 - Only the first video stream is checked.
 - Decode errors are not located to a frame (ffmpeg gives no frame number).
 - UNVERIFIED: whether the ProRes decoder derives frame color_range from the bitstream or

@@ -35,8 +35,9 @@ audio:
   tracks:
     - {index: 0, layout: stereo, content: "Stereo mix L/R"}
     - {index: 1, layout: stereo, content: "M&E L/R"}
+  programs:                       # the mix is the program; the M&E stream is judged on its own
+    - {name: mix, streams: [0]}
   loudness:
     standard: "EBU R128"
-    program_track: 0
 content:
   captions: {required: true, formats: [embedded_608]}

@@ -7,7 +7,7 @@ log alone. Conventions mirror the LTX_OFX log (one file, rotate at start, same l
 comp = module or check id; run = random id per `cmr` invocation; file = salted hash of the file
 being checked ("-" outside a file). Levels debug|info|warn|error|off (`--log-level`, env
 CMR_LOG_LEVEL). File: $CMR_LOG_DIR, else $XDG_CACHE_HOME/cmr/logs, else ~/.cache/cmr/logs
-(`--log-file` overrides); rotated at setup when >= 10 MB, 5 old files kept. Each line is one
+(macOS: ~/Library/Logs/cmr, D32) (`--log-file` overrides); rotated at setup when >= 10 MB, 5 old files kept. Each line is one
 O_APPEND write, so several processes can share the file (pid in every line).
 
 Privacy (decided): by default private data (paths, file/project names, user/host names, slate
@@ -73,8 +73,11 @@ def get(comp: str) -> logging.Logger:
 def log_dir() -> Path:
     if os.environ.get("CMR_LOG_DIR"):
         return Path(os.environ["CMR_LOG_DIR"])
-    cache = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
-    return Path(cache) / "cmr" / "logs"
+    if os.environ.get("XDG_CACHE_HOME"):
+        return Path(os.environ["XDG_CACHE_HOME"]) / "cmr" / "logs"
+    if sys.platform == "darwin":     # D32: where Console.app and users look for logs
+        return Path.home() / "Library" / "Logs" / "cmr"
+    return Path.home() / ".cache" / "cmr" / "logs"
 
 
 def log_path(log_file: str | None = None) -> Path:
@@ -381,16 +384,20 @@ def phase(logger: logging.Logger, name: str, level: int = logging.INFO):
 
 
 def memory() -> str:
-    """RSS / peak of this process (Linux /proc) and the peak of finished children."""
+    """RSS / peak of this process (Linux /proc; elsewhere the peak from getrusage) and the
+    peak of finished children."""
+    import resource
+    unit = 1024 * 1024 if sys.platform == "darwin" else 1024    # ru_maxrss: bytes on macOS, KB on Linux
     parts = []
     with contextlib.suppress(OSError):
         st = dict(l.split(":", 1) for l in Path("/proc/self/status").read_text().splitlines() if ":" in l)
         parts.append(f"rss {int(st['VmRSS'].split()[0]) // 1024} MB peak "
                      f"{int(st['VmHWM'].split()[0]) // 1024} MB")
+    if not parts:
+        with contextlib.suppress(Exception):
+            parts.append(f"peak {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // unit} MB")
     with contextlib.suppress(Exception):
-        import resource
-        kb = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss   # KB on Linux, bytes on macOS
-        parts.append(f"children peak {kb // (1024 * 1024 if sys.platform == 'darwin' else 1024)} MB")
+        parts.append(f"children peak {resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss // unit} MB")
     return ", ".join(parts) or "memory n/a"
 
 
@@ -411,6 +418,32 @@ def _cmd_out(cmd: list, timeout: float = 5) -> str | None:
     return out if p.returncode == 0 and out else None
 
 
+def sysctl(name: str) -> str | None:
+    """`sysctl -n NAME` (macOS facts; None when absent or failing). /usr/sbin is not always on
+    PATH for scripted shells, hence the fallback."""
+    binary = shutil.which("sysctl") or "/usr/sbin/sysctl"
+    return _cmd_out([binary, "-n", name])
+
+
+def performance_cores() -> int | None:
+    """macOS on Apple Silicon: physical performance cores (hw.perflevel0), else None."""
+    v = sysctl("hw.perflevel0.physicalcpu") if sys.platform == "darwin" else None
+    return int(v) if v and v.isdigit() else None
+
+
+def _darwin_facts() -> dict:
+    """Chip, P/E cores, macOS version, Rosetta flag, RAM (D32). Each value guarded."""
+    pc, ec = sysctl("hw.perflevel0.physicalcpu"), sysctl("hw.perflevel1.physicalcpu")
+    mem = sysctl("hw.memsize")
+    rosetta = {"1": "YES (translated: cmr refuses Rosetta, D32)", "0": "no"}.get(
+        sysctl("sysctl.proc_translated") or "", "n/a")
+    return {"chip": sysctl("machdep.cpu.brand_string") or "unknown",
+            "cores": f"{pc or '?'} performance + {ec or '?'} efficiency",
+            "macos": platform.mac_ver()[0] or "unknown", "arch": platform.machine(),
+            "rosetta": rosetta,
+            "ram": f"{int(mem) / 1024 ** 3:.1f} GB" if mem and mem.isdigit() else None}
+
+
 def _static_facts() -> dict:
     """Slow, machine-wide facts, cached per process (tests call main() many times)."""
     if not _static:
@@ -428,6 +461,10 @@ def _static_facts() -> dict:
         if "MemAvailable" in mem:
             ram += f" (available {int(mem['MemAvailable'].split()[0]) / 1024 ** 2:.1f} GB)"
         libc = platform.libc_ver()
+        if sys.platform == "darwin":
+            mac = _darwin_facts()
+            ram = mac.pop("ram") or ram
+            _static["mac"] = mac
         _static.update(version=__version__, git=(git or "unknown").replace("\n", " "),
                        os=platform.platform(), kernel=platform.release(),
                        libc=" ".join(x for x in libc if x) or "n/a", ram=ram,
@@ -465,6 +502,9 @@ def environment(ffmpeg: str = "ffmpeg", ffprobe: str = "ffprobe", filters: set |
     add("host", lambda: redact("host", socket.gethostname()))
     add("user", lambda: redact("user", getpass.getuser()))
     add("os", lambda: f"{s['os']} kernel {s['kernel']} libc {s['libc']}")
+    if "mac" in s:
+        add("macos", lambda: (f"{s['mac']['macos']} {s['mac']['arch']}, chip {s['mac']['chip']}, "
+                              f"{s['mac']['cores']} cores, Rosetta {s['mac']['rosetta']}"))
     add("python", lambda: f"{platform.python_version()} {redact('tool', sys.executable)}")
     add("ffmpeg", lambda: _tool(ffmpeg))
     add("ffprobe", lambda: _tool(ffprobe))
@@ -502,6 +542,8 @@ def limits() -> str:
         import resource
         soft = resource.getrlimit(resource.RLIMIT_AS)[0]
         io = _cmd_out(["ionice", "-p", str(os.getpid())]) if shutil.which("ionice") else "n/a"
+        if sys.platform == "darwin":
+            return f"nice {os.nice(0)}, ionice n/a, no memory cap on macOS (RLIMIT_AS not enforced)"
         return (f"nice {os.nice(0)}, ionice {io}, RLIMIT_AS "
                 f"{'unlimited' if soft == resource.RLIM_INFINITY else f'{soft / 1024 ** 3:.1f} GB'}")
     except Exception as e:   # noqa: BLE001

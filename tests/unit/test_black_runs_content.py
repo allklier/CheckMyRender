@@ -42,4 +42,4 @@ def test_short_raw_run_with_content_not_reported():
 def test_bright_chain_threshold_in_input_range():
     c = bright_chain(100)
     assert c.startswith("lutyuv=y='if(gt(val,minval+(100-16)*(maxval-minval)/219),maxval,minval)'")
-    assert c.endswith("scale=iw/4:ih/4:flags=area+accurate_rnd,format=yuv420p,signalstats")
+    assert c.endswith("scale=iw/4:ih/4:flags=area+accurate_rnd:out_range=tv,format=yuv420p,signalstats")

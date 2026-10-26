@@ -42,7 +42,8 @@ statistic means ">= 50% black". Binarising first makes YAVG the coverage.
 Verified on ffmpeg 6.1.1 (`ffmpeg -h filter=crop|signalstats|metadata|split|
 lut2|shuffleplanes`; 5.1.10 on Rocky 9 runs the same graph): crop needs exact=1 (1px-wide crop on 4:2:2 fails without
 it); signalstats on a 1px-wide 4:2:2 crop segfaults and reports native bit
-depth, hence format=yuv444p (8-bit, source range kept); lut2 x/y = input 0/1,
+depth, hence format=yuv444p (8-bit; `scale=out_range=tv` first: ffmpeg 7.1 keeps full
+range in that conversion, 5.1/6.1 mapped yuvj to tv); lut2 x/y = input 0/1,
 c0..c2 per plane; YAVG prints with 3 decimals.
 """
 from __future__ import annotations
@@ -152,7 +153,7 @@ def chains(params: dict | None, frame_step: int = 1) -> dict[str, str]:
         g, k = _geometry(e, d), f"bk{e}"
         red, top = _max_reduce(e, d, f"{k}s", k)
         out[e] = ";".join([
-            f"{sel}crop={g['strip']}:exact=1,format=yuv444p,shuffleplanes=0:0:0,"
+            f"{sel}crop={g['strip']}:exact=1,scale=out_range=tv,format=yuv444p,shuffleplanes=0:0:0,"
             f"split=5[{k}n][{k}f][{k}o][{k}i][{k}a]",
             f"[{k}n]crop={g['near']}:exact=1[{k}nc];[{k}f]crop={g['far']}:exact=1[{k}fc];"
             f"[{k}nc][{k}fc]lut2=c0='255*lte(x,{ml})*gte(y-x,{ms})':c1='0':c2='0'[{k}s]",
@@ -167,7 +168,7 @@ def chains(params: dict | None, frame_step: int = 1) -> dict[str, str]:
             f"[{k}lj][{top}]lut2=c0='255*(eq(x,255)+eq(x,128)*gt(y,0))':c1='x':c2='x',"
             f"signalstats"])
         k = f"bd{e}"
-        out[e + DARK] = (f"{sel}crop={g['strip']}:exact=1,format=yuv444p,shuffleplanes=0:0:0,"
+        out[e + DARK] = (f"{sel}crop={g['strip']}:exact=1,scale=out_range=tv,format=yuv444p,shuffleplanes=0:0:0,"
                          f"split[{k}o][{k}i];[{k}o]crop={g['outer']}:exact=1[{k}oc];"
                          f"[{k}i]crop={g['inner']}:exact=1[{k}ic];"
                          f"[{k}oc][{k}ic]lut2=c0='255*lte(x,{bl})*gte(y-x,{mc})',signalstats")

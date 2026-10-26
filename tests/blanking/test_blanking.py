@@ -142,7 +142,7 @@ def test_chains_shape():
     # right edge: strip x=iw-5; outer line = strip column 4, adjacent 3, inner 0; near/far
     # blocks (neighbour pairs) are columns 1..4 / 0..3
     r = ch["right"]
-    assert r.startswith("crop=w=5:h=ih:x=iw-5:y=0:exact=1,format=yuv444p,shuffleplanes=0:0:0,"
+    assert r.startswith("crop=w=5:h=ih:x=iw-5:y=0:exact=1,scale=out_range=tv,format=yuv444p,shuffleplanes=0:0:0,"
                         "split=5[bkrightn][bkrightf][bkrighto][bkrighti][bkrighta];"
                         "[bkrightn]crop=w=4:h=ih:x=1:y=0:exact=1[bkrightnc];"
                         "[bkrightf]crop=w=4:h=ih:x=0:y=0:exact=1[bkrightfc];")

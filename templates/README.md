@@ -2,21 +2,26 @@
 
 Starting points for your own QC setup. **Copy, then edit the copy**; do not edit the files
 here or in `profiles/` (an update of CheckMyRender would overwrite them). Every file is
-commented line by line. The full explanation of every field is in [../USERGUIDE.md](../USERGUIDE.md).
-The guide's quick starts (A: any render, B: slated spot, C: waivers) use these files.
+commented line by line. The full explanation of every field is in the user guide, `USERGUIDE.md`
+([link](../USERGUIDE.md) in a CheckMyRender folder; the installer's `~/cmr-workspace` copy of
+this folder does not include the guide: open the one from your CheckMyRender folder). The
+guide's quick starts (A: any render, B: slated spot, C: waivers) use these files.
+
+Where this folder is: `templates/` in the CheckMyRender folder, or `~/cmr-workspace/templates`
+after the installer. Commands below are written for either; the guide calls it `TEMPLATES`.
 
 ## What to copy for which situation
 
 | Situation | Spec sheet (job facts) | Profile (rules) | Extra |
 |---|---|---|---|
-| First try, nothing to edit: the generated demo spot (`tests/slate/make_spot.py spots --short`) | `quickstart/spec_spot_short.yaml` | stock `spot_review` (named in `quickstart/job.yaml`) | the whole `quickstart/` folder: copy it, add the demo media, run `cmr check spots/clean/*.mov` in it |
+| First try, nothing to edit: the generated demo spot (`make_spot.py spots --short`, a script of the repo's `tests/` folder, needs Pillow + numpy) | `quickstart/spec_spot_short.yaml` | stock `spot_review` (named in `quickstart/job.yaml`) | the whole `quickstart/` folder: copy it, add the demo media, run `cmr check spots/clean/*.mov` in it |
 | Check a render right after it comes out of Flame (settings only, fast) | any spec below | `profiles/client_render_check.yaml` | |
 | Client / internal review render | `specs/spec_review_render.yaml` | `profiles/client_review.yaml` (or stock `review`) | |
 | Final master or deliverable, file-based | `specs/spec_master_generic.yaml` | `profiles/client_delivery.yaml` (or stock `release`) | `waivers/waivers_example.yaml` |
 | HD broadcast long form (bars, slate, DF timecode, 2 audio streams, captions) | `specs/spec_broadcast_hd_longform.yaml` | `profiles/client_delivery.yaml` (or stock `release` / `broadcast_master`) | |
 | Ad spot, short form (5 s slate + 2 s black, no tail) | `specs/spec_spot_short_form.yaml` | `profiles/client_delivery.yaml` | |
-| Ad spot with slate reading (**in development**) | `slate/spec_spot_slated.yaml` | stock `spot_render`, `spot_review`, `spot_delivery` | `slate/job.yaml`, `slate/deliverables.csv`, `slate/slates/slate_template.yaml` |
-| Colour / comp interim, picture only (graded or log, no audio) | `specs/spec_colour_interim_noaudio.yaml` | `profiles/client_colour_interim.yaml` (only this one: see the file header) | |
+| Ad spot with slate reading (needs tesseract) | `slate/spec_spot_slated.yaml` | stock `spot_render`, `spot_review`, `spot_delivery` | `slate/job.yaml`, `slate/deliverables.csv`, `slate/slates/slate_template.yaml` |
+| Colour / comp interim, picture only (graded or log, no audio) | `specs/spec_colour_interim_noaudio.yaml` | `profiles/client_colour_interim.yaml`, or stock `colour_interim` / `log_interim` (all three load with this spec; no other profile does, they ask the spec for audio values) | |
 | Folder of renders overnight | (one of the above) | (one of the above) | `automation/overnight_qc.sh`, `automation/summarize_reports.py` |
 
 ## Suggested folder layout and names
@@ -33,7 +38,8 @@ Keep your QC setup outside the CheckMyRender folder, e.g. `~/qc/`:
 
 - Lower case, no spaces, `_` between parts. The profile's `name:` = its file name without `.yaml`.
 - Do not reuse a stock profile name (`final`, `release`, `review`, `broadcast_master`,
-  `colour_interim`, `log_interim`, `spot_render`, `spot_review`, `spot_delivery`): use a prefix.
+  `review_internal`, `web_delivery`, `colour_interim`, `log_interim`, `spot_render`, `spot_review`,
+  `spot_delivery`): use a prefix.
 - A profile is used by path (`--profile ~/qc/profiles/hl_delivery.yaml`). Its `extends: release`
   finds the stock profile automatically (a file of that name next to yours wins).
 
@@ -76,10 +82,15 @@ render: it should come out PASS (or SKIPPED, see the guide). If it does not, fix
 One `cmr check` per file in `--mode background`, one report folder per file (with
 `cmr_report_latest.json`), a `summary.tsv` with the exit code of each file. Details and a cron example: USERGUIDE.md, "Batch and overnight runs".
 
+Reports: `cmr check` writes `cmr_report_<date-time>_<run id>.json` and a copy
+`cmr_report_latest.json` into the job's `output:` folder; `cmr waive reports/cmr_report_latest.json`
+lists the findings.
+
 ## How these templates were checked
 
-Every spec + profile pair was loaded with `cmr profiles show PROFILE --spec SPEC` and run with
-`cmr check` on generated media of the same layout (program length shortened to keep the files
+Every spec + profile pair was loaded with `cmr profiles show PROFILE --spec SPEC` (re-checked for
+this version: all pairs load except the no-audio interim spec with the profiles that need audio
+values, as listed above) and run with `cmr check` on generated media of the same layout (program length shortened to keep the files
 small): master, review, spot, long form (with real SMPTE bars in the head), interim (with and
 without a planted blanking defect), slated spot (with tesseract, on Rocky Linux 9 / ffmpeg 5.1.10).
 Parameters used here exist in the code: stock profiles in `profiles/`, check parameter schemas in

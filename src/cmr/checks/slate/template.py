@@ -27,6 +27,7 @@ import jsonschema
 import yaml
 
 from cmr.config import ConfigError, substitute
+from cmr.textnorm import nfc
 from .compare import DATE_FORMATS, TYPES
 
 LAYOUTS = ("aligned", "label_colon")
@@ -119,7 +120,7 @@ def load(path: str, spec: dict | None = None) -> Template:
         raise ConfigError(f"cannot read slate template {path}: {e}") from e
     if key not in _CACHE:
         try:
-            data = yaml.safe_load(p.read_text())
+            data = nfc(yaml.safe_load(p.read_text()))     # D32: labels/values in NFC
         except (OSError, yaml.YAMLError) as e:
             raise ConfigError(f"slate template {path}: {e}") from e
         try:

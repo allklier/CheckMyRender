@@ -11,6 +11,10 @@ checks:
     # 3-6 silent). Declare those in the spec (audio.allowed_silence); this profile still keeps
     # any other silent channel at info (predates allowed_silence; review whether to restore fail).
     severity: info
+  audio.silence:
+    # two tiers for long form: > 6 frames up to 30 = WARN (please listen), > 30 frames (~1 s) = FAIL
+    warn_run_frames: 6
+    max_run_frames: 30
   video.black_runs:
     max_findings: 25             # long form: act breaks and fades give more legitimate runs
   video.blanking:

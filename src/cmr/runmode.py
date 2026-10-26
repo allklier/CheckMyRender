@@ -1,13 +1,17 @@
-"""Run modes (D26). foreground (default) = shortest time to QC, no limits. background = capped
+"""Run modes (D26, D32). foreground (default) = shortest time to QC, no limits. background = capped
 so it does not disturb other apps on the machine: lower CPU priority, idle I/O priority (Linux),
-fewer ffmpeg filter threads and a virtual-memory cap. Limits are inherited by the ffmpeg/ffprobe
-children. Verified: `ionice --help` (-c 3 = idle, -p PID); resource.RLIMIT_AS exists on this
-Python. RLIMIT_AS is not enforced on macOS and ionice does not exist there; both are skipped."""
+fewer ffmpeg filter threads and a virtual-memory cap (Linux). Limits are inherited by the
+ffmpeg/ffprobe children. Verified: `ionice --help` (-c 3 = idle, -p PID); resource.RLIMIT_AS
+exists on this Python.
+macOS (D32): background = nice 15 and 2 filter threads only. RLIMIT_AS is not enforced there and
+ionice does not exist, so NO memory cap and no I/O priority are applied, and the log says so;
+Darwin background QoS (taskpolicy / PRIO_DARWIN_BG) is deliberately not used."""
 from __future__ import annotations
 
 import os
 import resource
 import shutil
+import sys
 
 from . import log
 
@@ -24,6 +28,11 @@ def apply(mode: str) -> int | None:
     if mode != "background":
         return None
     os.nice(BACKGROUND_NICE - os.nice(0))
+    if sys.platform == "darwin":
+        LOG.info("background mode applied: nice %d, %d filter threads; no memory cap on macOS "
+                 "(RLIMIT_AS is not enforced there), I/O priority unchanged", os.nice(0),
+                 BACKGROUND_FILTER_THREADS)
+        return BACKGROUND_FILTER_THREADS
     ionice = shutil.which("ionice")
     if ionice:
         log.run(LOG, [ionice, "-c", "3", "-p", str(os.getpid())], "ionice", capture_output=True)

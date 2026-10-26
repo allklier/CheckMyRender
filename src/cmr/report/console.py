@@ -43,6 +43,8 @@ def render(report: dict, verbose: bool = False) -> str:
                     lines.append(f"          was {fd['raw_severity']}; waiver {w['id']}: {w['reason']}")
                 elif w:
                     lines.append(f"          {w['note']} (reason was: {w['reason']})")
+                if w and w.get("fingerprint_note"):
+                    lines.append(f"          waiver {w['id']}: {w['fingerprint_note']}")
             for x in f.get("waived_by_category", []):
                 if x["check_id"] == cid:
                     lines.append(f"  {'WAIVED':7} {cid}: {x['count']} finding(s) by category waiver "

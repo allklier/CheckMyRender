@@ -69,7 +69,8 @@ class Black(Check):
   running detect/evaluate). Raise `engine.ConfigError("...")` for unusable
   params/spec values -> ERROR "configuration error: ..." (from taps() too). Any other exception -> ERROR
   finding ("check crashed").
-- `-filter_complex_threads`: `engine.default_filter_threads()` = min(8, cpu_count//2);
+- `-filter_complex_threads`: `engine.default_filter_threads()` = min(8, cpu_count//2)
+  (macOS: min(8, performance cores), see "macOS" below);
   override `run_file(filter_threads=N)` / `cmr check --filter-threads N`.
   Measured (16 CPUs, 1080p ProRes, 1440 frames, s): blanking only 1:1.8 2:1.6 4:1.7 8:2.1
   16:3.6; blanking+black_runs 1:65 2:39 4:25 8:21.6 16:20.2 (decode only 0.8). 16 (= ffmpeg
@@ -165,7 +166,7 @@ class Black(Check):
   (source tree, `PYTHONPATH=src`, and `pip install -e .`, which keeps editing the repo's files).
   `--profile PATH.yaml` and `extends` next to the extending file work unchanged. Templates,
   examples and slate templates are not packaged (no code path loads them by default).
-  Verified: `pip install --target` (dev box, Python 3.12.3) and a venv on the Rocky machine (Python
+  Verified: `pip install --target` (dev machine, Python 3.12.3) and a venv on the Rocky machine (Python
   3.12.15): `cmr profiles list` from /tmp lists all stock profiles from site-packages; editable
   install resolves to the repo's profiles/. Version single source: `cmr.__version__`
   (pyproject `dynamic = ["version"]`, `attr`). A non-editable `pip install .` leaves `build/` in
@@ -196,12 +197,56 @@ class Black(Check):
   version, frames, values}, reason, created, [expires]}]`. No reviewer identity (v1).
 - Fingerprint: up to 8 (video) / 16 (audio) evenly spaced frames of the range incl. first and
   last, one ffmpeg seek per frame AFTER the main pass, only for findings that location-match a
-  waiver (cmr check) or are being waived (cmr waive). Video `video_dhash`: `-ss (f-0.5)/fps -i F
-  -map 0:S -frames:v 1 -vf scale=9:8:flags=area+accurate_rnd,format=gray -f rawvideo -` -> 72
-  bytes -> 64-bit dHash (bit = left > right). Audio `audio_envelope`: `-ss f/fps -i F -map 0:S
+  waiver (cmr check) or are being waived (cmr waive). Video `video_dhash` v2 (algorithm
+  `dhash64-luma9x8-box`, written since 2026-10-26; ffmpeg is NOT in the reduction): `-ss
+  (f-0.5)/fps -i F -map 0:S -frames:v 1 -vf extractplanes=y -f rawvideo -` = the decoder's luma
+  plane at native size and bit depth (gray / gray10le / gray12le / gray16le; no scale, no
+  format conversion: verified byte-identical to the Y part of a native rawvideo decode, and
+  `ffmpeg -h filter=extractplanes`: planes y,u,v,r,g,b,a). RGB sources (pix_fmt rgb*/bgr*/gbr*/
+  argb/abgr/0rgb/x2rgb...): `extractplanes=r+g+b[r][g][b];[r][g][b]vstack=inputs=3` (`ffmpeg -h
+  filter=vstack`: inputs), luma = BT.709 integer weights 2126/7152/722 applied to the CELL SUMS
+  (a box mean is linear: no per-pixel work). Bit depth = first component of the stream pix_fmt
+  in `ffmpeg -pix_fmts` (BIT_DEPTHS column; same layout on 6.1.1/7.1.1/9.0.2), byte order from
+  the pix_fmt suffix (`be` -> swapped). Reduction in pure Python (`waivers.luma_cells`, stdlib
+  `memoryview`/`array`, per-row `sum()` over slices): cells = column edges `c*W//9` (c=0..9) x row
+  edges `r*H//8` (r=0..8), integer floor, every cell non-empty (W >= 9, H >= 8); cell value =
+  round-half-up(sum / (count * 2^(depth-8))) in integers = an 8-bit code, so 8/10/12/16-bit
+  encodes of one picture give the same codes, and the 8-bit step keeps the v1 dead zone (grain
+  on flat areas does not flip bits; the 10-bit tolerance stays calibrated). Range: values are
+  NOT range-converted (no swscale); a full-range (yuvj/pc) and a limited-range encode of the
+  same picture are an order-preserving linear map apart, which dHash ignores (measured 0-1 bit).
+  Fingerprint keys: `plane` (y | rgb) and `ffmpeg` (`ffmpeg -version` first line) are
+  INFORMATIONAL (not compared). A pix_fmt without an 8..16-bit integer plane (float EXR-style,
+  bayer, unknown) gets a v1 fingerprint (WARN logged); a v2 waiver cannot be matched on such a
+  file (fingerprint failure = content changed).
+  v1 (`dhash64-gray9x8-area`, waivers written before): `-vf
+  scale=9:8:flags=area+accurate_rnd,format=gray` -> 72 bytes, swscale does the averaging, so it
+  DEPENDS ON THE FFMPEG BUILD (Y-23 dim stripes read 0/8 on 6.1.1 but all 0 on 7.1.1/9.0.2).
+  Kept, unchanged, only to match v1 waiver files: `cmr check` recomputes a v1 waiver with the v1
+  chain (`Fingerprinter.fingerprint(..., version=1)`); the finding's `waiver` then carries
+  `fingerprint_version: 1` and `fingerprint_note` ("fingerprint v1 (depends on the ffmpeg
+  build); re-create the waiver to upgrade it to v2"), printed on the console under the finding.
+  Re-creating the waiver (`cmr waive` again) writes v2. A `format=yuv444p` variant of the v1
+  chain (tried by the ffmpeg 7.1 agent) reproduced 6.1.1 on 10-bit dim stripes under 7.1/9.0
+  but read 8-bit dim stripes as black on EVERY build and moved dark pictures by 3-4 bits, so the
+  original chain is kept. Audio `audio_envelope`: `-ss f/fps -i F -map 0:S
   -t 1/fps -f f32le -c:a pcm_f32le -` -> per channel [peak, RMS] dBFS, 0.1 dB, floor -90.
   Distance: max Hamming (video) / max |dB| (audio) over the sampled frames; other
   type/algorithm/version/frames = not comparable = content changed.
+- Cross-build (picture set made once with 6.1.1, byte-identical inputs; 8 frames each; Linux
+  6.1.1 dev machine vs conda-forge 7.1.1 and 9.0.2 on the Rocky machine): v2 hash bits AND all 72
+  cell codes identical on all 19 files (ProRes 422 10-bit, 4444 12-bit + alpha, H.264 8-bit crf
+  18/28, H.264 10-bit, yuvj420p full range, ffv1 1001x563 12-bit, gray16le, PNG rgb24/rgb48be,
+  dark low-contrast ProRes + H.264, Y-23 stripes 10-bit ProRes + 8-bit H.264, black, testsrc2,
+  the waiver test files). Same picture across encodes (v2): ProRes 10 -> H.264 crf 18/28 1 bit,
+  -> 10-bit H.264 / 4444 / yuvj 0, -> rgb24/rgb48 4, dark ProRes -> H.264 1; stripes vs black 32.
+  Audio envelope: PCM identical on all three builds; AAC differs (6.1.1 = 7.1.1, 9.0.2 up to 1.6
+  dB: the seek decodes AAC without pre-roll, 9.0 differs in how it handles that; all within the
+  2 dB tolerance). Not fixed (would need audio v2; PCM, the delivery format, is unaffected).
+- Cost v2 (dev machine, 1080p, one sampled frame incl. ffmpeg start): 8-bit H.264 ~90 ms, ProRes 10-bit
+  ~115 ms, 4444 12-bit ~160 ms, RGB 3 planes ~90-145 ms; of that the Python reduction is 8.5 ms
+  (8-bit) / 15-21 ms (10-16 bit). ~0.8-1.3 s per video finding (8 frames; v1 was ~0.7 s).
+  UHD/6K planes scale with the pixel count (UNVERIFIED, estimated 4-10x).
 - Matching (`waivers.apply`, pure, unit-tested with fake fingerprints): same check_id, stream and
   edge/kind/channel; finding range inside [frame_start - m, frame_end + m], m =
   max(profile `waivers.margin_frames` (5), evidence `boundary_uncertainty_frames`); the CURRENT
@@ -223,7 +268,7 @@ class Black(Check):
   +0.06 (eq) 0 (dHash ignores level shifts); dark low-contrast picture -> 8-bit H.264 max 12
   (would read as content changed: safe direction); white box over the central quarter max 16;
   different picture max 42. Cost ~70-85 ms per sampled frame (1080p ProRes, includes ffmpeg
-  start), i.e. ~0.7 s per video finding.
+  start), i.e. ~0.7 s per video finding. (These figures are v1; v2 see above.)
 - Category waivers (blanket decision for a check class; NO fingerprint, so a changed picture
   is not noticed - that is the point of a blanket waiver): `cmr waive --category CHECK_ID
   [--class KIND] [--edge top|bottom|left|right | --channel C] [--frames A-B] --max-severity
@@ -385,3 +430,84 @@ class Black(Check):
   info / 1.339 s debug; slate spot (short, OCR skipped) 2.984 / 3.063 / 3.077 s. INFO costs a
   fixed ~75 ms per invocation (snapshot subprocesses: ffmpeg/ffprobe -version, nvidia-smi, git,
   ionice), independent of file length; per-file logging is a few ms.
+
+## macOS (D32) - Apple silicon; first real session 2026-10-26
+Machine: Mac Studio M1 Ultra (16 performance + 4 efficiency cores, 128 GB), macOS 26.7.1, arm64,
+/bin/bash 3.2.57. Everything in ONE folder (`~/cmr-mac`: Miniforge, env, repo copy, media), no
+sudo, no shell rc changes; uninstall = delete the folder.
+- Setup used for development (conda-forge only): Miniforge 26.9.4-0 `Miniforge3-MacOSX-arm64.sh`
+  (sha256 85512f54...c760 = the versioned `Miniforge3-26.9.4-0-MacOSX-arm64.sh.sha256`; the
+  unversioned `releases/latest/download/...sh.sha256` is a 404), `bash Miniforge3-...sh -b -p DIR`
+  (`-h` lists -b -f -p -s -u -t -c; batch mode changes no shell files), then `conda create -p ENV
+  --override-channels -c conda-forge python=3.12 pip pyyaml jsonschema pytest numpy pillow ffmpeg
+  tesseract=5.5.2` -> python 3.12.16, ffmpeg 9.0.2 (gpl, x264), tesseract 5.5.2 / leptonica
+  1.87.0, numpy 2.5.4, pillow 13.0.0. `CONDA_REGISTER_ENVS=false` keeps the env out of
+  `~/.conda/environments.txt` (conda still rewrote that file's mtime once). ffmpeg 6.1 + tesseract
+  5.5.2 cannot share one env (unsolvable on osx-arm64 and linux-64; 7.1 and 8.0 solve); the
+  installer's separate ffmpeg-env gave conda-forge ffmpeg 6.1.2 on the Mac.
+- Installer (bash 3.2 port, real run): see installer/CLAUDE.md.
+- ffmpeg 9.0.2 osx-arm64: encoders prores_ks, prores_videotoolbox, libx264, h264_videotoolbox,
+  dnxhd, mpeg2video, pcm_s24le; hwaccels videotoolbox, vulkan; 506 filters (Linux conda-forge
+  9.0.2: 533), none of the 15 required ones missing. VideoToolbox is not used (D32 scout: decode
+  is a small part of the pass).
+- Platform branches (all guarded, Linux unchanged; tests fake `sys.platform`):
+  `runmode.apply` background = nice 15 + 2 filter threads, NO RLIMIT_AS, no ionice, log
+  `background mode applied: nice 15, 2 filter threads; no memory cap on macOS (RLIMIT_AS is not
+  enforced there), I/O priority unchanged`; `log.log_dir()` = `$CMR_LOG_DIR`, else
+  `$XDG_CACHE_HOME/cmr/logs`, else `~/Library/Logs/cmr` (Linux `~/.cache/cmr/logs`);
+  `log.memory()` without /proc = `peak N MB` from `getrusage` (ru_maxrss in BYTES on macOS);
+  snapshot line `env macos: 26.7.1 arm64, chip Apple M1 Ultra, 16 performance + 4 efficiency
+  cores, Rosetta no` (`sysctl -n hw.memsize | machdep.cpu.brand_string |
+  hw.perflevel0.physicalcpu | hw.perflevel1.physicalcpu | sysctl.proc_translated`,
+  `platform.mac_ver()`; all verified on the Mac, `log.sysctl()` falls back to /usr/sbin/sysctl),
+  `env limits: ... no memory cap on macOS (RLIMIT_AS not enforced)`. Engine thread default on
+  macOS = min(8, `hw.perflevel0.physicalcpu`) (no SMT, so P cores take the place of "half the
+  logical CPUs"); 8 on the M1 Ultra.
+- Thread timing (`cmr check`, best of 2, 1440-frame 1080p ProRes HQ testsrc2, s; same clip and
+  script on both machines; Linux = the 16-CPU dev machine):
+
+  | profile | threads | Mac 9.0.2 | Mac 6.1.2 | Linux 6.1.1 | Linux 9.0.2 |
+  |---|---|---|---|---|---|
+  | blanking only | 1 / 2 / 4 / 8 / 16 | 4.1 / 4.2 / 4.6 / 5.7 / 7.3 | 4.5 / 4.6 / 5.2 / 6.3 / 8.4 | 4.5 / 3.5 / 3.3 / 3.6 / 6.1 | 3.3 / 3.5 / 3.8 / 3.2 / 5.6 |
+  | blanking + black_runs | 1 / 2 / 4 / 8 / 16 | 22.3 / 18.0 / 15.8 / 15.7 / 17.1 | 24.7 / 19.4 / 16.8 / 16.6 / 18.7 | 29.8 / 22.5 / 14.6 / 13.3 / 14.1 | 27.7 / 20.8 / 18.2 / 14.7 / 14.8 |
+
+  The default (8 on both) is within 1% of the best for the heavy case; small-strip taps prefer
+  fewer threads on the Mac too. The Mac is ~15-20% slower than the dev machine at 8 threads.
+- Cross-platform parity (`tests/suite/compare.py --strict`, 29 report cases: make_media cases,
+  quality fast/high, MXF/Avid probe cases, slated spots clean/errors x review/delivery, inputs
+  byte-identical, copied from Linux): Linux conda-forge 9.0.2 vs Mac 9.0.2 (both tesseract
+  5.5.2) = ALL equivalent, slate OCR included; Linux 6.1.1 vs Mac 6.1.2 = equivalent except the
+  ProRes decoder's corrupt-file messages (`ac tex damaged 2048, 2048` vs `3818, 1024`) and the
+  slate cases (no tesseract on the dev machine); Mac 6.1.2 vs Mac 9.0.2 = equivalent except the
+  slate TITLE on the errors spot (uncertain-read WARN vs FAIL: the OCR frame is converted to
+  8-bit gray by ffmpeg, so OCR confidences depend on the ffmpeg build as well as on tesseract).
+  Share meta tier (4 real files, background mode): Linux 6.1.1 vs Mac 9.0.2 all equivalent.
+  Decoded video is bit-identical across all four builds (md5 of the decoded stream).
+- ffmpeg >= 7 differences found (fixed): `ffmpeg -filters` has 2 flag columns from 8.0 (parser
+  accepts both; before the fix every filter read as missing -> all content checks ERROR);
+  ffmpeg 9 removed `-top` (test generator uses `setfield=tff`); ffmpeg >= 7 converts untagged
+  frames to the output's `-colorspace` (test generators now tag frames with `setparams`; decoded
+  media identical to 6.1 output). The waiver dHash v1 chain
+  (`scale=9:8:flags=area+accurate_rnd,format=gray`) gives different gray values per build: dim
+  stripes at Y 23 read 0/8 on Linux 6.1.1 and Mac 9.0.2 but all 0 on Linux 7.1.1/8.0.1/9.0.2.
+  FIXED by the v2 video fingerprint (luma plane via `extractplanes`, reduction in Python; see
+  Waivers): identical bits on 6.1.1 / 7.1.1 / 9.0.2; v1 is kept only to match old waiver files.
+- File names: APFS keeps names as created (an NFD name lists as NFD) and opens NFC and NFD
+  spellings alike; case-insensitive by default. `MediaInfo.name`/`.stem` = the stored folder
+  entry (`media.disk_name`: exact, else the single entry equal ignoring case and normalisation)
+  in NFC: `cmr check showname_101...mov` on a file stored as `SHOWNAME_101...` gave a false
+  filename FAIL before. NFC (`cmr.textnorm.nfc`) at ingestion: spec/job YAML, slate templates,
+  deliverables CSV headers/cells, OCR words, waiver text fingerprints. Paths used to open files
+  are never changed.
+- TMPDIR: macOS temp is `/var/folders/../T/` (safe). A temp folder whose path is unsafe for a
+  filtergraph `file=` (e.g. a space) now falls back to /tmp (was: every content check ERROR).
+- Log: rotation at start + flock and two concurrent processes verified on APFS; default log
+  `~/Library/Logs/cmr/cmr.log`; `cmr doctor` OK. The `gpu:` line says "none found
+  (nvidia-smi absent)" on a Mac (cosmetic).
+- The media share (SMB, mounted by the user): readable over ssh without a TCC prompt;
+  `cmr probe` 1 s. Whether a LaunchAgent/Terminal run needs a Network Volumes permission: UNVERIFIED.
+- Run tests on the Mac: `PATH=<env>/bin:/usr/bin:/bin:/usr/sbin:/sbin CMR_TESSERACT=<env>/bin/tesseract
+  CMR_TEST_MEDIA=<dir> PYTHONPATH=src <env>/bin/python -m pytest -q tests`; installer tests with
+  the real bash 3.2: add `CMR_TEST_BASH=/bin/bash`. Results 2026-10-26: 479 passed, 6 skipped
+  (shellcheck, 5 bundle builds that need /usr/bin/python3 with setuptools) on ffmpeg 9.0.2 with
+  Mac-made and with Linux-made media, and on ffmpeg 6.1.2; ~5.6 min.

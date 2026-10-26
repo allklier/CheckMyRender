@@ -48,7 +48,7 @@ class Filename(Check):
     def evaluate(self, ctx, candidates):
         from .. import deliverables
         job, tags = ctx.params.get("job") or {}, ctx.params.get("tags") or {}
-        act = ctx.media.path.name
+        act = ctx.media.name
         ns, out = None, []
         pattern = job.get("naming_pattern") or ""
         if not job.get("filename") and re.search(r"\{(row|file)\.", pattern):

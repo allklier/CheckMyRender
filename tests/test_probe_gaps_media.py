@@ -29,7 +29,8 @@ def gmedia():
                                      vcodec=["-c:v", "dnxhd", "-b:v", "175M"], **MXF_AUDIO),
         "mpeg2_il_mxf": make_media.make(
             out, "pg_mpeg2_il_mxf", filename="pg_mpeg2_il.mxf", fps="30000/1001", pix_fmt="yuv422p",
-            vcodec=["-c:v", "mpeg2video", "-b:v", "50M", "-flags", "+ilme+ildct", "-top", "1"],
+            # top field first via setfield (ffmpeg 9 removed the `-top` option; same result on 6.1)
+            vcodec=["-c:v", "mpeg2video", "-b:v", "50M", "-flags", "+ilme+ildct"], vf_extra="setfield=tff",
             color=[], timecode="00:59:59;00", **MXF_AUDIO),
         "avid_mov": make_media.make(out, "pg_avid_mov", filename="pg_avid.mov", fps="2997/125",
                                     pix_fmt="yuvj420p", vcodec=["-c:v", "libx264", "-preset", "ultrafast"],

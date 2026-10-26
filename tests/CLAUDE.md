@@ -16,8 +16,8 @@ Portability (ffmpeg 5.1 on Rocky 9 and 6.1 locally; details src/cmr/CLAUDE.md):
   in the video chain (make_media) or `-t` (test_engine `tiny`). Video-only clips may use `-frames:v`.
 
 ## Slate test media (D27, Extreme Reach short form)
-`/usr/bin/python3 tests/slate/make_spot.py OUTDIR [--values FILE] [--short] [--defect NAME ...]`
-(needs Pillow + numpy: system python3 here). Default writes OUTDIR/clean/ and OUTDIR/errors/
+`python tests/slate/make_spot.py OUTDIR [--values FILE] [--short] [--defect NAME ...]`
+(`python` = a Python with numpy and Pillow: not /usr/bin/python3 on Rocky, which is 3.9 without them). Default writes OUTDIR/clean/ and OUTDIR/errors/
 (all defects except `slate_4s`); `--defect` (repeatable) writes one file to OUTDIR/<NAME+NAME>/.
 Each run writes OUTDIR/values.yaml (slate text per file: frames 0-119 and the last countdown
 second 120-149, render date, measured loudness) and OUTDIR/manifest.yaml (each planted defect:
@@ -42,7 +42,18 @@ Waivers (D17): `tests/unit/test_waivers.py` (matching logic with fake fingerprin
 outside / margin / fast uncertainty / locator / changed / incomparable / stale / expiry / file
 round trip), `tests/test_waivers_media.py` (black run 30-49 waived -> WAIVED exit 0; re-render
 with dim stripes at Y~23, still a black run -> content_changed; clean file -> stale; audio
-clipping waived; loudness integrated waived while true peak stays FAIL; metadata not waivable).
+clipping waived; loudness integrated waived while true peak stays FAIL; metadata not waivable;
+new waivers carry fingerprint v2 + `ffmpeg`; a v1 waiver file still matches with the v1 chain and
+the report/console say "fingerprint v1 ... re-create the waiver").
+Video fingerprint v2: `tests/unit/test_waiver_fingerprint.py` (no media: cell edges for odd
+sizes, the same picture at 8/10/12/16 bit and big-endian gives the same cells, known hashes,
+dim stripes Y 23 vs black = 32 bits, rounding dead zone + half-up, RGB stacked planes =
+BT.709 luma, bad sizes/depths raise, pix_fmt table parsing, v2 record keys, v1 recompute +
+report note, unsupported pix_fmt -> v1), `tests/test_fingerprint_media.py` (generated 640x360
+mandelbrot: ProRes 10-bit vs H.264 crf 18/28, 10-bit H.264 and rgb24 PNG within the 10-bit
+tolerance; Y-23 stripes 10-bit ProRes and 8-bit H.264 vs black beyond it; `extractplanes=y`
+equals the Y part of a native decode). Both pass on ffmpeg 6.1.1 (dev machine) and conda-forge
+7.1.1 / 9.0.2 (Rocky machine), as do the waiver media tests.
 
 Category waivers + findings cap: `tests/unit/test_waivers_category.py` (ceiling on raw severity,
 sharp FAIL through a WARN ceiling, class/edge/channel/frame range, metadata never waived,
@@ -86,7 +97,7 @@ failures stay `real_issue`, expectations are never bent to make a run pass. Matc
 severity (+ locator when given), frames overlap within 5 frames (or the fast-mode uncertainty).
 Kept small on purpose: no per-finding message text (wording changes), no timings.
 
-Runner: `PYTHONPATH=src /usr/bin/python3 tests/suite/run_suite.py [SUITE] --tag smoke|acceptance|meta
+Runner: `PYTHONPATH=src python tests/suite/run_suite.py [SUITE] --tag smoke|acceptance|meta
 [--run ID] [--slow] [--quality fast|high] [--meta] [--update-baseline] [--dry-run]` (SUITE or
 `$CMR_SUITE`). One file at a time: `cmr check` via the CLI (`--mode background`, `--max-findings 0`,
 JSON) into SUITE/runs/<stamp>_<tier>/<id>/ + <id>.log + summary.json; verdict per run PASS / FAIL
@@ -101,7 +112,7 @@ Tiers by tag: `meta` (no decode pass: safe on any size), `smoke` (quality fast; 
 files > 500 MB by real size; seconds per file), `acceptance` (all runs, profile quality, compare
 with expected.yaml / baseline), `slow` (> 5 GB: only with --slow or --run, on the workstation),
 `needs-tesseract` (SKIP without `$CMR_TESSERACT` / tesseract on PATH). Load check for every pair:
-`PYTHONPATH=src /usr/bin/python3 -m cmr profiles show PROFILE --spec SPEC [--job JOB]`.
+`PYTHONPATH=src python -m cmr profiles show PROFILE --spec SPEC [--job JOB]`.
 Rules on the shared server: one file at a time, `--mode background`, `timeout`, no full decodes
 outside the acceptance tier, stills by seeking only.
 
@@ -156,6 +167,12 @@ build_graph `Tap.inputs` routing), media `tests/test_audio_multistream.py` (5.1 
 mov and mxf vs analytic and independent `join` + ebur128; LFE at -1 dBFS kept out of I and true
 peak; program_track unchanged; undeclared silent streams FAIL, declared INFO; declared time range;
 config error). Note: test module basenames must be unique across tests/ and tests/unit/.
+Per-program audio (audio.programs): unit `tests/unit/test_audio_program_silence.py` (canned peaks
+per mono stream -> program runs, LFE/`-` excluded, unprogrammed stream per stream, declared
+silence, silent_channel by role + include_lfe, clipping naming, older spelling + conflicts,
+undeclared-programs notice), media `tests/test_audio_program_media.py` (make_media_audio
+`gated()`: surround gaps pass, whole 5.1 silent = one FAIL, declared = INFO, Rs dead =
+silent_channel, stereo-only head/tail passes without declarations; no programs = per stream).
 
 ## job.yaml entry point (D31) - tests
 `tests/unit/test_job_entry.py` (find_job order and errors, job_settings path resolution, job id
@@ -168,3 +185,31 @@ of another job refused; `--any-job` category; waiver files without `job`; missin
 quick start A with `one_track`), `tests/test_quickstart_media.py` (templates/quickstart copied
 unedited + make_spot `--short` media: without tesseract only the 4 OCR checks ERROR; with
 tesseract the clean spot passes, exit 0; verified on the Rocky machine).
+
+## macOS (D32) and other ffmpeg builds - tests
+- Run on the Mac: see src/cmr/CLAUDE.md "macOS" (env python, `CMR_TESSERACT`, `CMR_TEST_MEDIA`;
+  `CMR_TEST_BASH=/bin/bash` runs tests/installer with the real bash 3.2 and BSD tools; the toolbox
+  takes `sha256sum` or `shasum`). No `timeout` on macOS: wrap long runs from the calling machine.
+- Media made on Linux can be copied to the Mac (rsync of `$CMR_TEST_MEDIA`): tests reuse existing
+  files, so OCR/slate runs see byte-identical inputs. make_media output decodes identically on
+  ffmpeg 6.1.1 and 9.0.2 (generators tag frames with `setparams` when the output is tagged
+  bt709); make_spot slate media differs in bytes between ffmpeg builds (prores_ks) and fonts
+  (`$CMR_TEST_FONT`/`$CMR_TEST_FONT_REGULAR`, else DejaVu on Debian/Fedora, DejaVuLGC on Rocky 9,
+  Arial in /System/Library/Fonts/Supplemental on macOS), but its checks pass on both.
+- Platform branches are unit-tested on any OS with a faked `sys.platform` / sysctl:
+  `tests/unit/test_log_darwin.py` (log dir, snapshot facts, Rosetta flag, memory without /proc,
+  thread default), `tests/unit/test_runmode.py` (darwin branch: nice only, log says no memory
+  cap), `tests/unit/test_nfc.py` (NFD vs NFC everywhere names/text are compared, stored disk
+  name on case-insensitive volumes, unsafe TMPDIR), installer `test_macos_arm64_install_log_and_hints`
+  + Rosetta/Intel refusals (fake `sysctl`, `sw_vers`).
+- Strict cross-platform compare: `python tests/suite/compare.py --strict A.json B.json`
+  (`compare.compare_strict`): tolerance 0 on check/severity/locator/frame ranges, integers exact,
+  LUFS/LU/dBTP within 0.05, other dB within 0.1, OCR confidences ignored, tool/profile/spec stamps
+  and paths ignored, ffmpeg pointer addresses masked; unit tests in tests/unit/test_suite_compare.py.
+- Former build dependency (fixed by the v2 video fingerprint, 2026-10-26): tests/test_waivers_media.py
+  `test_black_run_waived_then_content_changed` failed on Linux x86_64 with ffmpeg 7.1.1/8.0.1/9.0.2
+  (v1 swscale dHash read Y-23 stripes as black). Now passes on 6.1.1, 7.1.1 and 9.0.2 (8.0.1 not
+  re-run). See src/cmr/CLAUDE.md "Waivers".
+- tests/suite/run_suite.py runs each `cmr check` in its own session and kills the whole process
+  group on timeout (SIGTERM, SIGKILL after 10 s), so no ffmpeg is left behind (unit test
+  `test_run_group_timeout_kills_grandchildren`).

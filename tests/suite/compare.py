@@ -7,8 +7,11 @@ Expectation format (expected.yaml `runs.<id>`; see tests/CLAUDE.md "QC test suit
   absent: [check ids]         must report no problem finding (INFO..ERROR)
   other: fail | allow         unlisted problem findings fail the run (default fail)
 Severity `pass`/`skipped` in an expectation matches a PASS/SKIPPED result of that check.
+Strict cross-platform mode (`compare_strict`, CLI `compare.py --strict A.json B.json`): see below.
 """
 from __future__ import annotations
+
+import re
 
 PROBLEM = ("INFO", "WARN", "FAIL", "ERROR")
 LOCATORS = ("kind", "edge", "channel")
@@ -127,3 +130,118 @@ def _same_range(a: dict, b: dict, tol: int) -> bool:
         return a.get("frame_start") == b.get("frame_start")
     return (abs(a["frame_start"] - b["frame_start"]) <= tol
             and abs(a["frame_end"] - b["frame_end"]) <= tol)
+
+
+# --- strict cross-platform mode (D32: the same input checked on Linux and on the Mac) ---------
+# Tolerance 0 on check / severity / locator / frame ranges; numbers in evidence, expected and
+# actual: integers (pixel statistics, frame counts) exactly equal; loudness and true peak
+# (LUFS / LU / dBTP) within 0.05; other dB levels (peak, RMS, dBFS) within 0.1; any other float
+# exactly equal. OCR confidences are never compared (different tesseract/leptonica builds, D32).
+# Ignored stamps: `tool` (versions), `profile`/`spec` (paths and hashes), the file path (files
+# are paired by base name), run ids/dates; messages are compared with numbers masked (the
+# numbers themselves are compared through evidence/actual).
+STRICT_LOUDNESS_TOL = 0.05
+STRICT_DB_TOL = 0.1
+_STRICT_IGNORE_TOP = ("tool", "profile", "spec")
+_FINDING_KEYS = ("raw_severity", "stream", "timecode_start", "timecode_end", "quality", "verifier",
+                 "waiver_ref", "waiver")
+_LOUD = re.compile(r"lufs|(^|_)lu($|_)|lra|true_peak|dbtp", re.I)
+_DB = re.compile(r"db|peak|rms|level", re.I)
+_NUM = re.compile(r"[-+]?\d+(\.\d+)?")
+_PTR = re.compile(r"0x[0-9a-f]+")
+
+
+def strict_tolerance(check_id: str, key: str) -> float | None:
+    """Allowed |a - b| for a float at `key` (None = not compared)."""
+    k = key.lower()
+    if "conf" in k:
+        return None
+    if _LOUD.search(k) or (k in ("expected", "actual") and check_id == "audio.loudness"):
+        return STRICT_LOUDNESS_TOL
+    if _DB.search(k) or (k in ("expected", "actual") and str(check_id).startswith("audio.")):
+        return STRICT_DB_TOL
+    return 0.0
+
+
+def _strict_diff(a, b, where: str, check_id: str, key: str, out: list[str]) -> None:
+    if isinstance(a, dict) and isinstance(b, dict):
+        for k in sorted(set(a) | set(b), key=str):
+            if k not in a or k not in b:
+                out.append(f"{where}.{k}: only on {'A' if k in a else 'B'}")
+            else:
+                _strict_diff(a[k], b[k], f"{where}.{k}", check_id, str(k), out)
+    elif isinstance(a, list) and isinstance(b, list):
+        if len(a) != len(b):
+            out.append(f"{where}: {len(a)} vs {len(b)} items")
+        for i, (x, y) in enumerate(zip(a, b)):
+            _strict_diff(x, y, f"{where}[{i}]", check_id, key, out)
+    elif (isinstance(a, (int, float)) and isinstance(b, (int, float))
+          and not isinstance(a, bool) and not isinstance(b, bool)):
+        if isinstance(a, int) and isinstance(b, int):
+            if a != b and "conf" not in key.lower():
+                out.append(f"{where}: {a} vs {b}")
+            return
+        tol = strict_tolerance(check_id, key)
+        if tol is not None and abs(a - b) > tol + 1e-9:
+            out.append(f"{where}: {a} vs {b} (tolerance {tol})")
+    elif isinstance(a, str) and isinstance(b, str):
+        if _PTR.sub("0x#", a) != _PTR.sub("0x#", b):      # ffmpeg log prefixes carry pointers
+            out.append(f"{where}: {a!r} vs {b!r}")
+    elif a != b:
+        out.append(f"{where}: {a!r} vs {b!r}")
+
+
+def _strict_key(f: dict) -> tuple:
+    return _key(f) + (f.get("frame_start"), f.get("frame_end"))
+
+
+def compare_strict(a: dict, b: dict) -> list[str]:
+    """Every difference between two reports of the same input(s) (A = e.g. Linux, B = Mac).
+    Empty list = equivalent. Files are paired by base name; findings by check, severity,
+    locator and exact frame range."""
+    out: list[str] = []
+    _strict_diff(a.get("summary") or {}, b.get("summary") or {}, "summary", "", "summary", out)
+    for k in sorted((set(a) | set(b)) - set(_STRICT_IGNORE_TOP) - {"files", "summary"}):
+        _strict_diff(a.get(k), b.get(k), k, "", k, out)
+
+    def by_name(r):
+        return {str(f.get("path", "")).replace("\\", "/").rsplit("/", 1)[-1]: f for f in r.get("files") or []}
+    fa, fb = by_name(a), by_name(b)
+    for name in sorted(set(fa) | set(fb)):
+        if name not in fa or name not in fb:
+            out.append(f"file {name}: only on {'A' if name in fa else 'B'}")
+            continue
+        x, y = fa[name], fb[name]
+        if x.get("identity") != y.get("identity"):
+            out.append(f"file {name}: identity differs (not the same input bytes)")
+        for k in sorted((set(x) | set(y)) - {"path", "identity", "findings"}):
+            _strict_diff(x.get(k), y.get(k), f"{name}.{k}", "", k, out)
+        left = list(y.get("findings") or [])
+        for f in x.get("findings") or []:
+            j = next((j for j, g in enumerate(left) if _strict_key(g) == _strict_key(f)), None)
+            if j is None:
+                out.append(f"{name}: only on A: {describe(f)}")
+                continue
+            g = left.pop(j)
+            cid, tag = f.get("check_id", ""), f"{name}: {describe(f)}"
+            if _NUM.sub("#", str(f.get("message"))) != _NUM.sub("#", str(g.get("message"))):
+                out.append(f"{tag}: message {f.get('message')!r} vs {g.get('message')!r}")
+            for k in _FINDING_KEYS:
+                _strict_diff(f.get(k), g.get(k), f"{tag} {k}", cid, k, out)
+            for k in ("expected", "actual"):
+                _strict_diff(f.get(k), g.get(k), f"{tag} {k}", cid, k, out)
+            _strict_diff(f.get("evidence"), g.get("evidence"), f"{tag} evidence", cid, "evidence", out)
+            _strict_diff(f.get("candidate"), g.get("candidate"), f"{tag} candidate", cid, "candidate", out)
+        out += [f"{name}: only on B: {describe(g)}" for g in left]
+    return out
+
+
+if __name__ == "__main__":     # python tests/suite/compare.py --strict A.json B.json
+    import json
+    import sys
+    if len(sys.argv) != 4 or sys.argv[1] != "--strict":
+        sys.exit("usage: compare.py --strict REPORT_A.json REPORT_B.json")
+    with open(sys.argv[2]) as fa, open(sys.argv[3]) as fb:
+        diffs = compare_strict(json.load(fa), json.load(fb))
+    print("\n".join(diffs) if diffs else "equivalent (strict)")
+    sys.exit(1 if diffs else 0)

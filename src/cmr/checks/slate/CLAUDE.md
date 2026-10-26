@@ -166,7 +166,7 @@ Common: `slate` ("${spec.slate}", required), `tesseract`, `psm` (3), `lang` (eng
 - One frame (2nd of the slate) decoded `-f rawvideo` in the NATIVE pixel format (no -pix_fmt:
   no swscale matrix/range/dither); planar yuv(a)420/422/444p at 8..16 bit parsed in pure Python
   (`array`), values compared as 8-bit equivalents (10-bit / 4). Other formats -> SKIPPED.
-  Measured: 1920x1080 yuv422p10le = 8,294,400 bytes; ~0.15 s per frame incl. ffmpeg (dev box).
+  Measured: 1920x1080 yuv422p10le = 8,294,400 bytes; ~0.15 s per frame incl. ffmpeg (dev machine).
 - Strips: template fractions (`y0 y1 x0 x1`, equal segments) or auto (spike bars.py on
   Y'CbCr: rows of the top/bottom `band`, cuts at steps, >= 4 equal-width segments covering > 70%
   of the width, longest run of such rows). Median Y/Cb/Cr over the inner half of the rows and the
@@ -211,7 +211,7 @@ decode). Same text = WAIVED; another text (e.g. the AD-ID changed) = content cha
 ## Real "Label: value" slates (2026-10-26; 5 real XR spots, private suite xr_spots)
 DNxHD 10-bit 1080p 2997/125, slate 0-118 + black 119-167, program 168; white on black, no
 bars. Frames 1 and 118 per file extracted by seeking (8-bit gray PNG), tesseract 5.5.2 `--psm 3`
-on the production machine, checks run on the dev box with those TSVs (reader seek/OCR
+on the production machine, checks run on the dev machine with those TSVs (reader seek/OCR
 replaced) and the real header probe: 7/7 labels read on both frames of all 5 spots (both label
 sets); every value read exactly; AD-ID confidence 37-57 (< 60: a mismatch there would be
 "uncertain", matches are fine), other fields 91-97. Findings: the :30 spot whose slate says 15s

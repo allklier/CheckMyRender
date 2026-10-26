@@ -135,7 +135,7 @@ class SlateClaims(SlateCheck):
         if read is not None and read.text:
             sources.append(("slate TITLE", read.text, read))
         if ctx.params.get("check_filename", True):
-            sources.append(("filename", ctx.media.path.stem, None))
+            sources.append(("filename", ctx.media.stem, None))
         seen: dict[tuple, list[str]] = {}
         texts = {}
         for src, text, rd in sources:

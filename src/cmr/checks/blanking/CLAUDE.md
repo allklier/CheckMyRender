@@ -1,6 +1,6 @@
 # video.blanking
 
-Decisions: ../../../../CLAUDE.md (D12, D13). Check interface: ../../CLAUDE.md.
+Decisions: ../../../../CLAUDE.md (D9, D12, D13). Check interface: ../../CLAUDE.md.
 
 Check id `video.blanking` (package `src/cmr/checks/blanking/`, tests `tests/blanking/`).
 
@@ -12,6 +12,7 @@ Check id `video.blanking` (package `src/cmr/checks/blanking/`, tests `tests/blan
 - [x] M5 engine: single-key prints (Tap.keys), exact pts frames, -filter_complex_threads
 - [x] Profile entry in profiles/final.yaml (`severity: fail`, `dark_edge_mode: flag`)
 - [x] M6 v3: sharp-step `edge` vs `dark_edge` class, run merging, dark_edge_mode (one real file + planted defects on real texture)
+- [x] M7 stage 2 temporal context (`context.py`): animation / transition / steady / unknown, may only lower (see "Stage 2")
 - [ ] Real-footage tuning on more renders (Flame ProRes deliverables; only one H.264 stage play so far)
 
 ### How it works (v3, sharp step + dark_edge class)
@@ -110,6 +111,88 @@ Raw-frame numpy hybrid measured earlier: no speed gain.
 | blanking + black_runs fast, 4 threads | 2.1 | 3.2 |
 The many small lut2/crop filters prefer few threads; the engine-wide thread default is shared
 with black_runs (not changed here).
+
+### Stage 2: temporal context (`context.py`, D9 slot, deterministic; 2026-10-26)
+Why: a long-form broadcast master (58 min, 1080i MPEG-2, many Ken Burns-animated stills with
+pillar/letterbox bars, montages, fades) gave 156 sharp `edge` FAILs; one frame cannot tell a
+pan/zoom or a dissolve from a mask error, the difference is temporal.
+Flow: `Blanking.evaluate` -> `detector.evaluate` -> `context.analyse(findings, ctx, dp)`. For every
+finding with a candidate (not persistent, span <= `context_max_span_frames`, worst first, at
+most `max_context_candidates`, within `context_max_seconds`): windows [start-K-1, end+K+1]
+(K = `context_frames` 12; fast mode: the possible range) are merged when they overlap and
+seek-decoded ONCE each: `ffmpeg -ss (f0-0.5)/fps -i F -map 0:V -frames:v N -vf
+scale=out_range=tv,format=yuv420p,extractplanes=y,metadata=mode=add:...,metadata=mode=print:file=T -f rawvideo -`
+(8-bit luma with the detector's code values; `format=gray` would expand tv range: Y 30 -> 16,
+218 -> 235, measured). Frames come from the exact pts: frame = round((pts x tb + X) x fps),
+X = the seek time as passed. Streamed frame by frame (memory = one frame). Pure Python on bytes
+(`bytes.translate` + `find`, no numpy): per frame and edge the band depth per line (run of
+luma <= black_luma from the edge, up to `context_depth_fraction` 1/8 of the frame), coverage,
+median depth (left/right: mean of even/odd-row medians), mean luma of the outer line, and a
+sparse luma sample (every 61st byte) for frame differences.
+Features per hit (evidence[0], plus `context`, `context_version`, `window`, `hit`):
+`depth_track` (window <= 64 frames), `hit_depth_px`, `hit_depth_range_px`, `band_run`,
+`context_band_frames`, `depth_min/max`, `depth_motion_px`, `moving_steps`, `monotone`,
+`velocity_px`, `trend_r2`, `symmetry` / `opposite_band` (opposite edge banded with similar
+depth on the hit frames), `cut_distance`, `dissolve_distance`, `dissolve_share`, `cuts`,
+`onset_jump`, `reason` (unknown). `finding.verifier` = {name blanking.context, version 1,
+decision, p null, model_hash null, severity, lowered}; `Finding.lower_to` only (raw kept).
+Rules, in this order:
+1. animation: band on >= 3 context frames (run through the hit, stopping at cuts/dissolves),
+   depth moves >= 3 px, >= 2 moving steps, >= 80 % of them in one direction (steps < 1 px are
+   repeats: 3:2 pulldown gives a zero step every 5th frame), straight-line R^2 >= 0.8.
+2. transition: onset jump <= 8 AND (hit <= 2 frames within 2 frames of a cut, OR >= 50 % of
+   the hit frames within 2 frames of a dissolve/fade). Cut = local frame-difference spike
+   (>= 12 and >= 4 x the median of +-12 frames). Dissolve = mean |Y(t+4)-2Y(t)+Y(t-4)| /
+   mean |Y(t+4)-Y(t-4)| <= 0.35 with mean |Y(t+4)-Y(t-4)| >= 2, runs >= 3 frames.
+3. steady: depth range during the hit <= max(2 px, 20 % of the depth) - the mask-error
+   signature (stays at its stage-1 severity).
+4. unknown: erratic depth (dark picture, montage holds), not reproduced, not analysed (cap,
+   time, span, persistent, decode failure; `reason`).
+Severity: `context_severity` {animation: info, transition: info, steady: unchanged, unknown:
+unchanged}. A later ML verifier (engine.VERIFIERS) runs after evaluate and REPLACES
+`finding.verifier` (engine sets it); the context evidence stays (chaining = main-thread item).
+
+Measurements behind the thresholds (the PBS master, 20 windows of 21 s cut by stream copy
+(2.5 GB, never the whole file), 203 stage-1 hits re-found, all offsets matched to the earlier
+report; visual checks of strips):
+- Frame differences: 3:2 pulldown (every 5th diff ~0), held-frame montages (one change every
+  6 frames: every change counts as a cut, which is right), fire/flicker graphics (diff 15-30
+  every frame: local median prevents false cuts; a whole-file median gave many).
+- Dissolve linearity: real cross-dissolve / fades 0.05-0.30 (k = 4); slow Ken Burns of a still
+  0.42-0.88 (k = 1 gives ~1.0 everywhere because of the repeats and noise), 1 % of all frames
+  <= 0.30, median 1.22.
+- Onset jump of the outer line into the hit: real dissolve/fade hits 0-6; masks planted into
+  real dissolves and at cuts 19-49 (hence 8).
+- Ken Burns tracks (real): 33 27 27 21 15 9 5 5 1 0; 2 3 3 5 7 9 11 11 12 14 (both bars);
+  slow 1 1 2 5 6 6 6 7 7 8 8 8 9 (R^2 0.8-0.99); field split of real ~49 % hits: none (the
+  ~49 % coverage is picture content, not one field).
+Tests: `tests/unit/test_blanking_context.py` (canned depth tracks: Ken Burns, pulldown,
+steady, erratic, dissolve with gradual vs abrupt onset, cut rules, run stops at cuts, symmetry,
+fast widening, transitions on synthetic samples, frame features, driver with a faked decode:
+lowering, never raising, off, persistent/span/cap/time/decode failure), `tests/blanking/
+test_context_media.py` on `tests/blanking/gen_context.py` media (high and fast; also passes with
+ffmpeg 5.1.10 on the Rocky machine). Results (`context_analysis` on, default params):
+
+| set | before | after |
+|---|---|---|
+| synthetic gen_media.py (35 planted) high / fast | 35 found | 35 unchanged (34 edge FAIL steady + the 20 px one matte WARN steady); 0 lowered |
+| planted on real texture (6 PBS excerpts x 28: 1 px full 1/3/10 fr, 50 %/70 %, 2 px, 6 px; re-encoded H.264) high | 154 seen, 133 FAIL | 133 FAIL (0 lowered); before the onset rule 3 were lowered (inside a real dissolve / at a cut) |
+| same, fast | 160 seen, 138 FAIL | 138 FAIL |
+| gen_context.py (Ken Burns zoom + pan, fade, field cut, steady in moving shot / near fade / dark scene) | all FAIL/WARN | Ken Burns 4 edge FAIL + 4 matte WARN -> INFO animation; fade -> INFO transition; 4 planted steady stay FAIL |
+| real PBS excerpts, high (203 hits) | edge 124 FAIL, dark_edge 37 FAIL, matte 42 WARN | edge: 14 animation + 8 transition -> INFO, 88 steady + 14 unknown FAIL; dark_edge: 10 -> INFO, 27 FAIL; matte: 5 -> INFO, 37 WARN |
+| same, fast (141 hits) | edge 73, dark 28, matte 40 | edge 12 -> INFO (8 anim, 4 trans), 29 steady, 32 unknown |
+
+Steady real hits are mostly constant 1 px lines (a dimmed top line on 49 % of the columns
+for seconds, 1 px dark columns in archival shots, one 5-6 px left band in a split-screen,
+1 px bands per held image in a step-printed montage): the analyser cannot excuse them and
+does not claim they are defects (review sheets: check_my_render_testdata/suite/stills/pbs_blanking).
+Cost: 0.4 s per 29-frame seek window on the 26 GB master over the share (long-GOP MPEG-2,
+10 windows), ~2.3 ms per frame for the features; ~0.1 s per analysed candidate on excerpts
+(windows shared). Seek decode = full decode, sample-identical (8 windows, long-GOP 1080i).
+Cannot be separated: a mask error that moves with a Ken Burns (an animated resize mistake) =
+animation; a mask switched on at a dark edge during a fade (onset jump small) = transition; a
+1-frame band at a cut that switches on abruptly stays FAIL (a field-mixed cut frame would too,
+none seen); dark moving picture at an edge with a straight-line depth trend = animation.
 
 ### Known gaps
 - Hard case, cannot be separated by a per-pixel rule: a real 1px black line (Y 16) next to

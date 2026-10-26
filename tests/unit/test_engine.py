@@ -188,3 +188,21 @@ def test_config_error_wording(tiny, fake_checks):
 
     (f,) = engine.run_file(tiny, SPEC, {"checks": {"test.badcfg": {}}})["findings"]
     assert f.severity == Severity.ERROR and f.message.startswith("configuration error:")
+
+
+def test_filter_list_parses_ffmpeg6_and_ffmpeg9_formats():
+    """`ffmpeg -filters`: 3 flag columns (T S C) in 6.1.1 and 7.1.1, 2 columns (T S) in 8.0.1 and
+    9.0.2 (found on conda-forge ffmpeg 9.0.2: every filter read as missing before the fix)."""
+    from cmr.engine import _FILTER_LINE
+    v6 = [" .S. signalstats       V->V       Generate statistics from video analysis.",
+          " ..C acompressor       A->A       Audio compressor.",
+          " T.C crop              V->V       Crop the input video.",
+          " ... abuffer           |->A       Buffer audio frames."]
+    v9 = [" .S signalstats       V->V       Generate statistics from video analysis.",
+          " TS aap               AA->A      Apply Affine Projection algorithm.",
+          " .. ebur128           A->N       EBU R128 scanner.",
+          " .. abuffer           |->A       Buffer audio frames."]
+    hdr = ["  T.. = Timeline support", "  ------", "Filters:"]
+    for lines, want in ((v6, ["signalstats", "acompressor", "crop", "abuffer"]),
+                        (v9, ["signalstats", "aap", "ebur128", "abuffer"])):
+        assert [m.group(1) for l in lines + hdr if (m := _FILTER_LINE.match(l))] == want

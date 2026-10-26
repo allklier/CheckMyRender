@@ -5,7 +5,7 @@ tuning knobs live in detector.py; see src/cmr/checks/blanking/CLAUDE.md for meas
 """
 from cmr.engine import Check, ConfigError, Tap, register
 
-from . import detector
+from . import context, detector
 
 _NUM = {"type": "number", "minimum": 0}
 EXCLUDE_SEGMENTS = ("slate", "bars_tone", "two_pop")   # user decision (gap fix)
@@ -40,6 +40,7 @@ class Blanking(Check):
                 "type": "object", "additionalProperties": False,
                 "properties": {k: _SEV for k in detector.DEFAULTS["class_severity"]},
             },
+            **context.params_schema(),   # stage 2 (temporal context), see context.py
         },
     }
 
@@ -64,7 +65,10 @@ class Blanking(Check):
 
     def evaluate(self, ctx, candidates):
         try:
-            return detector.evaluate(candidates, ctx.params, cap=ctx.severity,
-                                     check_id=ctx.check_id)
+            out = detector.evaluate(candidates, ctx.params, cap=ctx.severity,
+                                    check_id=ctx.check_id)
         except ValueError as e:   # bad dark_edge_mode
             raise ConfigError(str(e)) from e
+        # stage 2 (D9 slot, deterministic): temporal context of each hit; may only lower
+        context.analyse(out, ctx, detector.params_with_defaults(ctx.params))
+        return out

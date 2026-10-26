@@ -47,6 +47,8 @@ def test_black_run_waived_then_content_changed(media, tmp_path, capsys):
     wfile = tmp_path / "waivers.yaml"
     assert main(["waive", str(tmp_path / "r1" / "cmr_report_latest.json"), "--all-check",
                  "video.black_runs", "--reason", "intended cut to black", "-o", str(wfile)]) == 0
+    fp = __import__("yaml").safe_load(wfile.read_text())["waivers"][0]["fingerprint"]
+    assert fp["version"] == 2 and fp["plane"] == "y" and fp["ffmpeg"].startswith("ffmpeg version")
 
     rc, rep = check(media["wv_black"], tmp_path / "r2", "--waivers", str(wfile))
     out = capsys.readouterr().out
@@ -70,6 +72,29 @@ def test_black_run_waived_then_content_changed(media, tmp_path, capsys):
     good = make_media.make(Path(media["wv_black"]).parents[1], "good")
     rc, rep = check(good, tmp_path / "r4", "--waivers", str(wfile))
     assert rc == 0 and [w["id"] for w in rep["waivers"]["stale"]] == ["W0001"]
+
+
+def test_v1_waiver_file_still_matches_and_is_reported(media, tmp_path, capsys):
+    """A waiver written before v2 (v1 fingerprint, swscale chain) is matched with the v1 chain
+    on the same build and the report says it is v1; re-creating it gives v2."""
+    import yaml
+    from cmr import waivers
+    check(media["wv_black"], tmp_path / "r1")
+    wfile = tmp_path / "w.yaml"
+    assert main(["waive", str(tmp_path / "r1" / "cmr_report_latest.json"), "--all-check",
+                 "video.black_runs", "--reason", "old waiver", "-o", str(wfile)]) == 0
+    data = yaml.safe_load(wfile.read_text())
+    w = data["waivers"][0]
+    w["fingerprint"] = waivers.Fingerprinter(media["wv_black"], "24000/1001").fingerprint(
+        w["check_id"], w["stream"], w["fingerprint"]["frames"], version=1)
+    del w["fingerprint"]["ffmpeg"]                  # v1 files had no ffmpeg key
+    assert w["fingerprint"]["algorithm"] == "dhash64-gray9x8-area"
+    wfile.write_text(yaml.safe_dump(data, sort_keys=False))
+    capsys.readouterr()
+    rc, rep = check(media["wv_black"], tmp_path / "r2", "--waivers", str(wfile))
+    (f,) = of(rep, "video.black_runs")
+    assert rc == 0 and f["waiver_ref"] == "W0001" and f["waiver"]["fingerprint_version"] == 1
+    assert "re-create the waiver to upgrade it to v2" in capsys.readouterr().out
 
 
 def test_audio_clipping_waived(media, tmp_path):

@@ -238,7 +238,8 @@ def cmd_check(a) -> int:
                 log.set_file(r["path"])
                 fp = waivers.Fingerprinter(r["path"], r["timeline"]["fps"], a.ffmpeg, a.ffprobe)
                 waivers.apply(r["findings"], wlist,
-                              lambda w: fp.fingerprint(w["check_id"], w["stream"], w["fingerprint"]["frames"]),
+                              lambda w: fp.fingerprint(w["check_id"], w["stream"], w["fingerprint"]["frames"],
+                                                        w["fingerprint"].get("version")),
                               ws, today, state)
                 r["worst"] = max((f.severity for f in r["findings"]), default=Severity.PASS).name
             log.set_file(None)

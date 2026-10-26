@@ -36,6 +36,7 @@ Sequences (EXR/DPX) are post-v1: only kind='file' exists.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass, field
 from fractions import Fraction
@@ -43,6 +44,7 @@ from pathlib import Path
 
 from . import log
 from . import vanc as vanc_mod
+from .textnorm import nfc
 from .timecode import parse_fps, TimecodeError
 
 LOG = log.get("media")
@@ -148,6 +150,21 @@ def _container(fmt: dict) -> str:
     return names[0] if names else "unknown"
 
 
+def disk_name(path: Path) -> str:
+    """The folder entry that `path` opens: path.name when listed as given, else the one entry
+    equal to it ignoring case and Unicode normalisation (case-insensitive volumes); path.name
+    when the folder cannot be listed or the match is not unique."""
+    try:
+        names = os.listdir(path.parent)
+    except OSError:
+        return path.name
+    if path.name in names:
+        return path.name
+    key = nfc(path.name).casefold()
+    hits = [n for n in names if nfc(n).casefold() == key]
+    return hits[0] if len(hits) == 1 else path.name
+
+
 @dataclass
 class MediaInfo:
     path: Path
@@ -161,6 +178,19 @@ class MediaInfo:
     timecode: str | None = None     # first embedded start timecode found
     timecode_source: str | None = None   # 'stream <index>' (tag on a stream) | 'format' (MXF)
     mxf_op: str | None = None       # MXF operational pattern ('OP1a'...), None if not MXF/unknown
+
+    @property
+    def name(self) -> str:
+        """File name for every comparison (D32): the name as stored in its folder (a
+        case-insensitive volume - APFS default, SMB - opens `clip.mov` for `CLIP.mov`; the
+        check must see the real name), in NFC. `path` stays as given, to open the file."""
+        if "_disk_name" not in self.__dict__:
+            self.__dict__["_disk_name"] = nfc(disk_name(self.path))
+        return self.__dict__["_disk_name"]
+
+    @property
+    def stem(self) -> str:
+        return Path(self.name).stem
 
     def to_dict(self) -> dict:
         def conv(o):

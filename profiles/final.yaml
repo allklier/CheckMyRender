@@ -58,20 +58,26 @@ checks:
   video.blanking:                 # 1px edge defects; thresholds default in the check, tune here
     severity: fail
     dark_edge_mode: flag          # dark picture at an edge (class dark_edge): flag | info | hide
+    context_analysis: true        # stage 2: temporal context of each hit (Ken Burns, cut/dissolve) may LOWER it
+    # context_severity: {animation: info, transition: info, steady: unchanged, unknown: unchanged}
   audio.loudness:                 # BS.1770 relative-gated over the program range (not dialogue-gated)
-    loudness: "${spec.audio.loudness}"    # spec: standard + program_track or programs (merged streams, LFE not measured)
+    loudness: "${spec.audio.loudness}"    # spec: standard + program_track (one stream) or programs
+    audio: "${spec.audio}"        # spec audio.programs: one measurement per program (merged streams, LFE not measured)
+    undeclared_programs_severity: warn    # several audio streams, no programs: only one measured (info|warn)
     standards:                    # numbers per standard live here, not in the spec
       "EBU R128": {target_lufs: -23, tolerance_lu: 1, true_peak_max_dbtp: -1}
       "ATSC A/85": {target_lufs: -24, tolerance_lu: 2, true_peak_max_dbtp: -2}
     # lra_max_lu: 20              # optional loudness-range limit
-  audio.silence:                  # dead zones in the program range, every audio stream
-    audio: "${spec.audio}"        # optional spec audio.allowed_silence (declared intended silence)
+  audio.silence:                  # dead zones in the program range: per declared program, else per stream
+    audio: "${spec.audio}"        # optional spec audio.programs and audio.allowed_silence (declared intended silence)
     threshold_dbfs: -60           # frame is silent when all channels peak below this
     max_run_frames: 12            # ~0.5 s at 24p
   audio.silent_channel:
-    audio: "${spec.audio}"        # optional spec audio.allowed_silence (declared intended silence)
+    audio: "${spec.audio}"        # optional spec audio.programs (channel roles) and audio.allowed_silence
     threshold_dbfs: -60           # channel peak below this for the whole program
+    include_lfe: false            # true: a program's LFE channel is judged too
   audio.clipping:
+    audio: "${spec.audio}"        # optional spec audio.programs: names program + channel role
     clip_dbfs: -0.1               # per-frame sample peak at/above this = clipping
     severity: fail
   decode.errors:

@@ -169,3 +169,111 @@ def test_wrapper_meta_disables_decoding_checks():
     for cid in ("video.blanking", "video.black_runs", "audio.loudness", "decode.errors"):
         assert w["checks"][cid] == {"enabled": False}
     assert "video.codec" not in w["checks"] and "timing.layout" not in w["checks"]
+
+
+# --- strict cross-platform mode (D32) ------------------------------------------------------
+def SR(*findings, exit_code=2, path="/linux/media/x.mov", **extra):
+    counts = {}
+    for f in findings:
+        counts[f["severity"]] = counts.get(f["severity"], 0) + 1
+    return {"schema_version": "1.4", "tool": {"ffmpeg": "6.1.1", "python": "3.12.3"},
+            "profile": {"name": "final", "sha256": ["aa"]}, "spec": {"path": "/a/s.yaml"},
+            "summary": {"exit_code": exit_code, "counts": counts},
+            "files": [{"path": path, "identity": {"size": 10, "sha": "s"}, "worst": "FAIL",
+                       "findings": list(findings), **extra}]}
+
+
+def LOUD(i=-23.04, tp=-9.71, conf=None):
+    f = F("audio.loudness", "FAIL", 0, 359, kind="integrated", integrated_lufs=i, true_peak_dbtp=tp)
+    f["message"] = f"integrated loudness {i} LUFS"
+    f["actual"] = i
+    return f
+
+
+def CLIP(peak=-0.05):
+    return F("audio.clipping", "FAIL", 40, 47, channel=1, peak_dbfs=peak)
+
+
+def BARS(y=940, conf=71.5):
+    return F("slate.bars", "WARN", 3, 3, kind="bars", y_measured=y, ocr_conf=conf)
+
+
+def test_strict_identical_and_stamps_ignored():
+    a = SR(LOUD(), CLIP(), BARS())
+    b = SR(LOUD(), CLIP(), BARS(), path="/Users/x/media/x.mov")
+    b["tool"] = {"ffmpeg": "7.1", "python": "3.12.9"}
+    b["profile"] = {"name": "final", "sha256": ["bb"]}
+    assert compare.compare_strict(a, b) == []
+
+
+def test_strict_loudness_and_db_tolerances():
+    a = SR(LOUD(-23.04, -9.71), CLIP(-0.05))
+    assert compare.compare_strict(a, SR(LOUD(-23.00, -9.67), CLIP(-0.14))) == []    # 0.04 / 0.09
+    d = compare.compare_strict(a, SR(LOUD(-22.98, -9.71), CLIP(-0.20)))
+    assert any("integrated_lufs" in x and "tolerance 0.05" in x for x in d)
+    assert any(".actual" not in x and " actual" in x for x in d)      # actual of audio.loudness: 0.05
+    assert any("peak_dbfs" in x and "tolerance 0.1" in x for x in d)
+    assert not any("true_peak" in x for x in d)
+
+
+def test_strict_integers_exact_confidence_ignored():
+    d = compare.compare_strict(SR(BARS(940, 71.5)), SR(BARS(939, 40.0)))
+    assert len(d) == 1 and "y_measured" in d[0] and "940 vs 939" in d[0]
+
+
+def test_strict_frame_range_severity_and_locator_tolerance_zero():
+    a = SR(F("video.blanking", "FAIL", 69, 97, edge="left", kind="edge"))
+    for other in (F("video.blanking", "FAIL", 69, 98, edge="left", kind="edge"),
+                  F("video.blanking", "WARN", 69, 97, edge="left", kind="edge"),
+                  F("video.blanking", "FAIL", 69, 97, edge="right", kind="edge")):
+        d = compare.compare_strict(a, SR(other))
+        assert any("only on A" in x for x in d) and any("only on B" in x for x in d)
+
+
+def test_strict_summary_identity_message_and_missing_file():
+    a, b = SR(LOUD(), exit_code=2), SR(LOUD(), exit_code=1)
+    b["files"][0]["identity"] = {"size": 11, "sha": "t"}
+    b["files"][0]["findings"][0]["message"] = "integrated loudness -23.04 LUFS (other words)"
+    d = compare.compare_strict(a, b)
+    assert "summary.exit_code: 2 vs 1" in d
+    assert any("identity differs" in x for x in d) and any("message" in x for x in d)
+    c = SR(LOUD(), path="/m/y.mov")
+    d = compare.compare_strict(a, c)
+    assert "file x.mov: only on A" in d and "file y.mov: only on B" in d
+
+
+def test_strict_number_masking_in_messages():
+    a, b = SR(LOUD(-23.04)), SR(LOUD(-23.01))
+    assert compare.compare_strict(a, b) == []
+
+
+# --- run_suite: timeout kills the whole process group (no orphaned ffmpeg) ---------------------
+def test_run_group_timeout_kills_grandchildren(tmp_path):
+    import os
+    import subprocess
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "suite"))
+    import run_suite
+    pidfile = tmp_path / "pid"
+    cmd = ["sh", "-c", f"sleep 60 & echo $! > {pidfile}; wait"]
+    with open(tmp_path / "log", "w") as fh:
+        with pytest.raises(subprocess.TimeoutExpired):
+            run_suite.run_group(cmd, fh, dict(os.environ), timeout=1)
+    pid = int(pidfile.read_text())
+
+    def alive():
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        stat = Path(f"/proc/{pid}/stat")                 # Linux: a zombie counts as gone
+        return not (stat.exists() and stat.read_text().split()[2] == "Z")
+    import time
+    for _ in range(20):                                   # reaping by init may take a moment
+        if not alive():
+            break
+        time.sleep(0.1)
+    alive = alive()
+    assert not alive
+    with open(tmp_path / "log2", "w") as fh:
+        assert run_suite.run_group(["sh", "-c", "exit 3"], fh, dict(os.environ), timeout=10) == 3
