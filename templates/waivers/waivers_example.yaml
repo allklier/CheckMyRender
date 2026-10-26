@@ -1,0 +1,83 @@
+# =====================================================================================
+# WAIVER FILE EXAMPLE - reviewed findings that should not be flagged again
+# =====================================================================================
+# You normally do NOT write this file by hand. Create entries with `cmr waive`.
+#
+# In a job folder (job.yaml with `job: id:`, `waivers: waivers.yaml`, `output: reports`),
+# everything defaults to the job: the report goes to reports/, `cmr waive` writes the job's
+# waiver file and stamps each entry `job: <job id>`, `cmr check` reads it.
+#   Per finding (needs the JSON report and the same media file in place):
+#     cmr check RENDER.mov
+#     cmr waive reports/cmr_report_latest.json          # lists findings with numbers
+#     cmr waive reports/cmr_report_latest.json --finding 37 \
+#         --reason "Fade to black in the edit, approved" --expires 2027-06-30
+#   Per category (a blanket decision, no report needed):
+#     cmr waive --category video.blanking --class dark_edge --edge left \
+#         --max-severity warn --reason "Dark curtain on the left"
+#   Then every later render of the job:   cmr check RENDER_v2.mov
+#
+# Without a job file, name the files yourself:
+#     cmr check RENDER.mov --profile P --spec S --report json -o reports/
+#     cmr waive reports/cmr_report_latest.json --finding 37 --reason "..." -o waivers.yaml
+#     cmr check RENDER_v2.mov --profile P --spec S --waivers waivers.yaml
+# (reports/ holds cmr_report_<date-time>_<run id>.json per run and a copy of the newest,
+# cmr_report_latest.json; `cmr waive` takes either.)
+#
+# Job scope: an entry with `job: <id>` applies only to runs of that job (the job.yaml
+# `job: id:`); entries of another job are skipped and listed as "foreign" in the report.
+# `job: "*"` applies to every job (`cmr waive ... --any-job`), e.g. a house-wide category
+# waiver. An entry without `job` (files written by older cmr versions) applies to every run.
+#
+# Safe to edit by hand: `reason`, `expires` and `job`. Do NOT edit ids, frames or fingerprints:
+# a fingerprint is a small "picture/sound signature" of the waived frames; cmr compares
+# the new render with it and re-flags the finding if the content changed.
+# Keep one waiver file per job, next to its job.yaml.
+# Entries in this example are illustrations; their fingerprints were made from generated
+# test media and match nothing in a real render (they would be listed as "stale").
+# =====================================================================================
+waiver_version: 2        # 1 = only per-finding waivers; 2 = file also has category waivers
+waivers:
+# --- per-finding waiver (made by `cmr waive REPORT --finding N`) ---------------------
+- id: W0001
+  job: hl_exco_rush                    # the job id (job.yaml `job: id:`) this waiver belongs to
+  check_id: video.black_runs           # which check
+  stream: 0                            # which stream of the file (0 = first video stream)
+  frame_start: 50                      # waived range, file frames (inclusive)
+  frame_end: 65
+  timecode_start: 01:00:01:02          # the same range as timecode (for people)
+  timecode_end: 01:00:01:17
+  message: 16 consecutive black frames in program
+  fingerprint:                         # written by cmr - do not edit
+    type: video_dhash
+    algorithm: dhash64-gray9x8-area
+    version: 1
+    frames: [50, 52, 54, 56, 59, 61, 63, 65]
+    values: ['0000000000000000', '0000000000000000', '0000000000000000', '0000000000000000',
+      '0000000000000000', '0000000000000000', '0000000000000000', '0000000000000000']
+  reason: Fade to black in the edit, approved by the director   # REQUIRED: why it is OK
+  created: '2026-10-26'
+  expires: '2027-06-30'                # optional: after this day the waiver is ignored
+
+# --- category waivers (made by `cmr waive --category ...`) ----------------------------
+# No fingerprint: every matching finding is waived, even if the picture changed.
+# max_severity is a ceiling on the ORIGINAL severity: a FAIL is not waived by a `warn`.
+- id: W0002
+  job: hl_exco_rush
+  type: category
+  check_id: video.blanking
+  kind: dark_edge                      # optional: only this class (edge | dark_edge | matte)
+  edge: left                           # optional: only this edge (top | bottom | left | right)
+  max_severity: warn
+  reason: Dark curtain on the left in the stage scenes
+  created: '2026-10-26'
+- id: W0003
+  job: "*"                             # every job (made with --any-job)
+  type: category
+  check_id: audio.clipping
+  channel: 2                           # optional: audio channel, 1-based
+  frame_start: 1000                    # optional: only inside this file frame range
+  frame_end: 1200
+  max_severity: fail
+  reason: Intentional distortion effect on the right channel in the opening
+  created: '2026-10-26'
+  expires: '2026-12-31'

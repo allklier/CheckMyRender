@@ -31,7 +31,7 @@ def clip():
 def check(f, out, *extra):
     rc = main(["check", str(f), "--profile", "final", "--spec", SPEC, "--report", "json",
                "-o", str(out), *extra])
-    return rc, json.loads((out / "cmr_report.json").read_text())
+    return rc, json.loads((out / "cmr_report_latest.json").read_text())
 
 
 def blanking(rep):
@@ -41,7 +41,7 @@ def blanking(rep):
 def test_cap_default_explicit_and_unlimited(clip, tmp_path, capsys):
     rc, rep = check(clip, tmp_path / "d")                        # default cap 10
     f = rep["files"][0]
-    assert rc == 2 and rep["schema_version"] == "1.2"
+    assert rc == 2 and rep["schema_version"] == "1.4"
     assert len(blanking(rep)) == 10 and all(x["severity"] == "FAIL" for x in blanking(rep))
     (s,) = f["suppressed"]
     assert (s["check_id"], s["count"], s["worst_severity"]) == ("video.blanking", 4, "FAIL")

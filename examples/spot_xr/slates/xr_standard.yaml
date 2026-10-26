@@ -1,0 +1,23 @@
+# Slate template: label/value slate with right-aligned labels, 100% colour bars along the top,
+# 8 grey steps along the bottom, countdown circle bottom right (ignored). Fictional example.
+# Field rules: aliases (label spellings), type (text|title|id|duration|date|audio),
+# optional (may be missing from the slate), expect (default expectation; tokens {job.*},
+# {row.*}, {file.*} resolved per file; the job file's slate.expect overrides; blank/null =
+# not checked; "<empty>" = must be empty). Detail: src/cmr/checks/slate/CLAUDE.md.
+template_version: 1
+name: xr_standard
+fields:
+  AGENCY:   {expect: "{job.agency}"}
+  CLIENT:   {expect: "{job.client}"}
+  PRODUCT:  {expect: "{job.product}", optional: true}
+  TITLE:    {type: title, expect: "{file.stem}"}
+  AD-ID:    {aliases: [AD-ID, ADID, AD ID], type: id, expect: "{row.ad_id}"}
+  DURATION: {aliases: [DURATION, LENGTH], type: duration, expect: ":{row.length}"}
+  AUDIO:    {type: audio}                      # verified against the media by slate.claims
+  DATE:     {type: date}                       # judged by the profile date policy
+  ARTIST:   {expect: "{job.artist}", optional: true}
+  MISC:     {optional: true}
+countdown: {x0: 0.78, y0: 0.68, x1: 0.94, y1: 0.94}
+bars:
+  colour: {band: top, segments: [white, yellow, cyan, green, magenta, red, blue, black]}
+  grey: {band: bottom, y_targets: [235, 204, 172, 141, 110, 79, 47, 16]}

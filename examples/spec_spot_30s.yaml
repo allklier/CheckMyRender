@@ -29,7 +29,7 @@ timing:
   timecode_mode: non-drop
   # file_start_timecode: optional; derived from head_layout + program_start if omitted
   program_start_timecode: "01:00:00:00"  # first program frame (FFOA)
-  program_duration_frames: 719            # 30 s spot: exact frame count per broadcast spec; set from the actual spec
+  program_duration_frames: 720            # 30 s spot: exact frame count per broadcast spec; set from the actual spec
   # duration clock: frame count (not wall clock; NDF 23.976 drifts from wall clock)
 
   # Video head: strictly sequential segments, starting at file frame 0.

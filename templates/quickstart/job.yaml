@@ -1,0 +1,45 @@
+# =====================================================================================
+# JOB FILE - quick start (works unedited with the generated demo spot)
+# =====================================================================================
+# job.yaml is the one file that says everything about a job. Run `cmr check` in the
+# folder that holds it and it needs no other options:
+#
+#   /usr/bin/python3 ~/CheckMyRender/tests/slate/make_spot.py spots --short   # demo media
+#   cmr check spots/clean/*.mov
+#
+# It names the spec sheet, the profile, the deliverables list, the slate template, the
+# waiver file and the report folder. Paths are relative to THIS file. An option on the
+# command line always wins (e.g. `--profile spot_delivery`, `-o other_folder`).
+# Other ways to point cmr at a job file: `--job PATH/job.yaml` or `--job-dir PATH`.
+#
+# Values:  blank = not specified = not checked.  "<empty>" = the slate field must be empty.
+# Tokens:  {job.x} = a value from the job: section, {row.x} = a column of the CSV row picked
+#          for the file, {file.x} = a part of the filename (named group of filename_regex).
+# All names below are fictional; they match the demo spot (tests/slate/values_fictional.yaml).
+# =====================================================================================
+job_version: 1                       # always 1
+
+spec: spec_spot_short.yaml           # technical spec sheet (codec, fps, head layout, audio)
+profile: spot_review                 # rules: a stock profile name, or a path to your own .yaml
+waivers: waivers.yaml                # accepted findings (`cmr waive` writes it; may not exist yet)
+output: reports                      # JSON reports go here (cmr_report_latest.json + one per run)
+
+job:
+  id: demo_sb_league                 # short job id: stamped on waivers, shown in reports
+  agency: Northwind Advertising
+  client: Sample Burgers
+  product: "<empty>"                 # the demo slate leaves PRODUCT empty
+  artist: Alex Example
+  uses_ad_id: true
+  # expected filename, built from the CSV row + filename parts + the profile tag {resolution}
+  naming_pattern: "{row.title}_{row.length}_{row.ad_id}_{resolution}_{file.variant}.mov"
+
+deliverables:
+  csv: deliverables.csv              # one row per SPOT (no filenames in it)
+  columns: {ad_id: "Ad-ID", title: "Title", length: "Length", version: "Version"}
+  key: ad_id                         # the Ad-ID in the filename selects the row
+  match: both                        # ... and the filename check verifies the whole name
+  filename_regex: '(?P<title>.+)_(?P<length>\d+)_(?P<ad_id>[A-Z0-9]{11}[HD]?)_(?P<resolution>\d+x\d+)_(?P<variant>Slated|Unslated)\.mov'
+
+slate:
+  template: slates/slate_template.yaml

@@ -1,0 +1,46 @@
+# =====================================================================================
+# PROFILE TEMPLATE - quick technical check right after a render (minutes, not hours)
+# =====================================================================================
+# A profile holds the RULES: which checks run and how strict they are. The job facts
+# (frame rate, length, codec ...) come from a spec sheet.
+#
+# This one answers "did the render come out with the right settings?" before anyone
+# watches it: codec, raster, frame rate, pixel format, colour tags, audio format and
+# layout, filename, length, head layout, timecode, and "does it decode". The picture and
+# sound content checks (blanking, black runs, loudness, silence, clipping) are OFF.
+# The file is still decoded once (decode.errors), but without the expensive picture
+# measurements.
+#
+# Use:
+#   cmr check RENDER.mov --profile profiles/client_render_check.yaml --spec SPEC.yaml
+# (a path works anywhere; or copy the file into the CheckMyRender profiles/ folder and use
+#  --profile client_render_check)
+#
+# Rules of the format (same for every profile):
+#   - `extends: final` = start from profiles/final.yaml and change only what is listed here.
+#     Settings merge per check: you only write the keys you change.
+#   - Per check, four reserved keys: enabled (true/false), severity (info | warn | fail),
+#     quality (fast | high; only video.blanking and video.black_runs have a fast mode),
+#     max_findings (how many problems of this check are listed; 0 = all).
+#   - Everything else under a check is a check parameter (see the user guide).
+# =====================================================================================
+profile_version: 1                   # always 1
+name: client_render_check            # keep equal to the file name (without .yaml)
+extends: final
+description: Right after render - settings, layout, timecode, filename, decode; no content checks.
+checks:
+  # --- content checks off: these need a full measurement pass ---
+  video.blanking: {enabled: false}
+  video.black_runs: {enabled: false}
+  audio.loudness: {enabled: false}
+  audio.silence: {enabled: false}
+  audio.silent_channel: {enabled: false}
+  audio.clipping: {enabled: false}
+
+  # --- what stays on (inherited from final, listed here so you can change it) ---
+  filename:
+    severity: warn                   # a wrong name is worth knowing, not a re-render
+  captions.presence:
+    severity: warn                   # captions are often added after the render
+  decode.errors:
+    max_findings: 5

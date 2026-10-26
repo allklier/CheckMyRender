@@ -8,8 +8,10 @@ from __future__ import annotations
 import os
 import resource
 import shutil
-import subprocess
 
+from . import log
+
+LOG = log.get("runmode")
 MODES = ("foreground", "background")
 BACKGROUND_NICE = 15
 BACKGROUND_FILTER_THREADS = 2
@@ -24,11 +26,15 @@ def apply(mode: str) -> int | None:
     os.nice(BACKGROUND_NICE - os.nice(0))
     ionice = shutil.which("ionice")
     if ionice:
-        subprocess.run([ionice, "-c", "3", "-p", str(os.getpid())], capture_output=True)
+        log.run(LOG, [ionice, "-c", "3", "-p", str(os.getpid())], "ionice", capture_output=True)
+    else:
+        LOG.info("ionice not available: I/O priority unchanged")
     soft, hard = resource.getrlimit(resource.RLIMIT_AS)
     cap = BACKGROUND_MEM_BYTES if soft == resource.RLIM_INFINITY else min(soft, BACKGROUND_MEM_BYTES)
     try:
         resource.setrlimit(resource.RLIMIT_AS, (cap, hard))
-    except (ValueError, OSError):
-        pass
+    except (ValueError, OSError) as e:
+        LOG.warning("RLIMIT_AS not set: %s", e)
+    LOG.info("background mode applied: nice %d, RLIMIT_AS %.1f GB, %d filter threads", os.nice(0),
+             cap / 1024 ** 3, BACKGROUND_FILTER_THREADS)
     return BACKGROUND_FILTER_THREADS

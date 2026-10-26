@@ -38,11 +38,30 @@ def nominal(fps: Fraction) -> int:
     return round(fps)
 
 
+def ntsc_nominal(fps: Fraction) -> int:
+    """Nominal integer rate an fps belongs to, NTSC rates included: round(fps x 1001/1000).
+    23.976 (24000/1001 or Avid's 2997/125) -> 24, 29.97 -> 30, 59.94 -> 60, 24 -> 24, 25 -> 25."""
+    return round(fps * Fraction(1001, 1000))
+
+
+def fps_equivalent(a: Fraction, b: Fraction) -> bool:
+    """Agreed rule (gap 3): two rates are the same when both round to the same NTSC nominal
+    and differ by less than 0.001 fps (2997/125 == 24000/1001; 24 != 24000/1001; 25 != 24)."""
+    return ntsc_nominal(a) == ntsc_nominal(b) and abs(a - b) < Fraction(1, 1000)
+
+
+def is_ntsc(fps: Fraction) -> bool:
+    """fps is an NTSC (x1000/1001) rate, exact or a rational within 0.001 fps of it
+    (Avid writes 2997/125 for 23.976 and 2997/100 for 29.97)."""
+    n = round(fps)
+    return fps != n and fps_equivalent(fps, Fraction(n * 1000, 1001))
+
+
 def _drop_per_minute(fps: Fraction, drop: bool) -> int:
     if not drop:
         return 0
     n = nominal(fps)
-    if n % 30 != 0 or fps.denominator != 1001:
+    if n % 30 != 0 or not is_ntsc(fps):
         raise TimecodeError(f"drop-frame timecode is not defined for {fps} fps")
     return 2 * (n // 30)
 

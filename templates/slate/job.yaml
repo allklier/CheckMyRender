@@ -1,0 +1,64 @@
+# =====================================================================================
+# JOB FILE TEMPLATE - slated spots  (SLATE CHECKS: IN DEVELOPMENT)
+# =====================================================================================
+# The slate checks read the slate with OCR and compare it with this job file, a
+# deliverables list (CSV) and the actual filename. They are new and have only been
+# tested on generated spots: treat their results as a second pair of eyes, not a gate.
+# Needs tesseract (see the user guide, "Slate checks").
+#
+# Files of one slated job (keep them in one folder):
+#   job.yaml               this file: job constants + where the CSV and template are
+#   deliverables.csv       one row per SPOT (no filenames in it)
+#   slates/<name>.yaml     slate template: which labels the slate has, what to expect
+#   spec_spot_slated.yaml  technical spec (codec, fps, head layout ...), NO job: section
+#
+# Run in the folder of this file (it names the spec, profile, waivers and report folder):
+#   cmr check "SPOT.mov"
+# Elsewhere: `cmr check "SPOT.mov" --job-dir PATH` (or --job PATH/job.yaml). Options given on
+# the command line win, e.g. --profile spot_delivery (profiles spot_render, spot_review,
+# spot_delivery). Older form, still fine: --profile spot_review --spec spec_spot_slated.yaml --job job.yaml
+#
+# Values:  blank = not specified = not checked.  "<empty>" = the slate field must be empty.
+# Tokens:  {job.x} = a value from this file's job: section, {row.x} = a column of the CSV
+#          row picked for this file, {file.x} = a part of the filename (named group of
+#          filename_regex below), {file.stem} = the filename without .mov.
+# =====================================================================================
+job_version: 1                       # always 1
+
+# The run (paths relative to THIS file; leave a line out to give it on the command line):
+spec: spec_spot_slated.yaml          # technical spec sheet
+profile: spot_review                 # stock profile name, or a path to your own profile .yaml
+waivers: waivers.yaml                # accepted findings; `cmr waive` in this folder writes here
+output: reports                      # JSON reports folder (turns the JSON report on)
+
+job:
+  id: hl_exco_rush                   # EDIT: short job id (letters, digits, _ - .), on waivers and reports
+  agency: Harbor Lane Creative       # EDIT (fictional example values)
+  client: Example Coffee Co          # EDIT
+  product: "<empty>"                 # this job's slates leave PRODUCT empty
+  artist: Sam Placeholder            # EDIT, or leave blank to not check ARTIST
+  uses_ad_id: true
+  # Expected filename, built from the CSV row + the filename parts + the profile tag
+  # {resolution} (the spot_* profiles define it as WIDTHxHEIGHT of the spec).
+  naming_pattern: "{row.title}_{row.length}_{row.ad_id}_{resolution}_{file.variant}.mov"
+
+deliverables:
+  csv: deliverables.csv              # relative to THIS file
+  # canonical name -> column header in the CSV
+  columns: {ad_id: "Ad-ID", title: "Title", length: "Length", version: "Version"}
+  key: ad_id                         # the column that identifies a spot
+  # How the CSV row for a file is found:
+  #   key            - the key (Ad-ID) is cut out of the filename and selects the row
+  #   generated_name - the row whose naming_pattern gives exactly this filename
+  #   both           - key selects, the filename check verifies the whole name (recommended)
+  #   fields         - no key column: the filename parts in match_fields select one row
+  # Override per run with:  cmr check ... --row EXCO2700001H   (or --row "#2", --row Title=...)
+  match: both
+  # Filename parts (Python regular expression with named groups). The group named like
+  # the key (ad_id) is used to select the row. A trailing H/D on the Ad-ID is ignored.
+  filename_regex: '(?P<title>.+)_(?P<length>\d+)_(?P<ad_id>[A-Z0-9]{11}[HD]?)_(?P<resolution>\d+x\d+)_(?P<variant>Slated|Unslated)\.mov'
+
+slate:
+  template: slates/slate_template.yaml   # relative to THIS file
+  # Per-job override of what the template expects for a field (blank/null = not checked):
+  # expect: {MISC: "suite-2"}

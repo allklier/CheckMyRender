@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, asdict
 from enum import IntEnum
 from typing import Any
 
-SCHEMA_VERSION = "1.2"   # Candidate / Finding / report schema version (1.1: waivers; 1.2: findings cap, category waivers; additive)
+SCHEMA_VERSION = "1.4"   # Candidate / Finding / report schema version (1.1: waivers; 1.2: findings cap, category waivers; 1.3: summary mode/quality; 1.4: summary.job_id, waivers.foreign; additive)
 
 
 class Severity(IntEnum):
@@ -43,6 +43,14 @@ def exit_code(worst: Severity, fail_on: str = "warn") -> int:
     if worst == Severity.WARN and fail_on == "warn":
         return EXIT_WARN
     return EXIT_PASS
+
+
+def file_verdict(severities) -> Severity:
+    """Worst severity of a file's results, except that SKIPPED alone is not a verdict: a file
+    whose only non-PASS results are SKIPPED is PASS (user decision; SKIPPED stays in the
+    counts and the listing). The exit code is the same either way (SKIPPED exits 0)."""
+    worst = max(severities, default=Severity.PASS)
+    return Severity.PASS if worst == Severity.SKIPPED else worst
 
 
 @dataclass

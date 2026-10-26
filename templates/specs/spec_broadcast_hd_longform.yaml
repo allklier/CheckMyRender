@@ -1,0 +1,72 @@
+# =====================================================================================
+# SPEC SHEET TEMPLATE - HD broadcast, long form (episode / programme master)
+# =====================================================================================
+# Facts of one long-form broadcast delivery. Values below are a typical North-American
+# 29.97 drop-frame layout and are an EXAMPLE ONLY: copy the numbers from the
+# broadcaster's delivery document, not from here.
+#
+# Use with:  --profile release   (or broadcast_master, or your copy of
+#            templates/profiles/client_delivery.yaml)
+# Check it loads:
+#   cmr profiles show release --spec specs/spec_<client>_<show>_<ep>.yaml
+#
+# Head layout used here (from the first frame of the file):
+#   bars and tone 30 s -> black 5 s -> slate 10 s -> black 5 s -> program at 01:00:00;00
+#   = 900 + 150 + 300 + 150 = 1500 frames, so the file starts at 00:59:10;00 (derived).
+# =====================================================================================
+spec_version: 1
+
+job:
+  title: "Example Series"            # EDIT
+  title_code: "EXSERIES"             # EDIT: filename-safe
+  episode: "104"                     # EDIT
+  version: "v02"                     # EDIT
+  client: "Example Network"          # EDIT (informational)
+  # {fps_tag} for 30000/1001 is "2997" in profiles/final.yaml
+  naming_pattern: "{title_code}_{episode}_{format}_{fps_tag}_{audio_tag}_{version}.mov"
+
+video:
+  container: mov
+  codec: prores
+  codec_profile: "422 HQ"
+  width: 1920
+  height: 1080
+  fps: "30000/1001"                  # 29.97 - exact fraction, in quotes
+  scan: progressive                  # interlaced 1080i deliveries: interlaced
+  pixel_format: yuv422p10le
+  color: {primaries: bt709, transfer: bt709, matrix: bt709, range: tv}
+  aspect_ratio: "16:9"
+  pixel_aspect: 1.0
+
+timing:
+  timecode_mode: drop                # drop-frame: timecode written with ';' (01:00:00;00)
+  program_start_timecode: "01:00:00;00"   # FFOA. Use ';' for drop-frame, ':' for non-drop
+  # file_start_timecode: "00:59:10;00"    # optional; derived from the head below if omitted
+  program_duration_frames: 79900     # EDIT: program frames. Count frames, not wall-clock time:
+                                     # a duration of 00:44:26;00 DF = 79900 frames. Work it out in your NLE/Flame
+                                     # (duration in frames) rather than by hand.
+  head_layout:
+    - {type: bars_tone, frames: 900} # 30 s
+    - {type: black, frames: 150}     # 5 s
+    - {type: slate, frames: 300}     # 10 s
+    - {type: black, frames: 150}     # 5 s
+    - {type: program}
+  tail_layout:
+    - {type: black, frames: 150}     # EDIT: tail black after the last program frame
+
+audio:
+  codec: pcm_s24le
+  sample_rate: 48000
+  bit_depth: 24
+  # One entry per audio STREAM, in file order. A Flame export can write one MONO stream
+  # per channel: then list each stream as `mono` (merging mono streams into one layout is
+  # not supported yet).
+  tracks:
+    - {index: 0, layout: stereo, content: "Stereo full mix L/R"}
+    - {index: 1, layout: "5.1", content: "5.1 full mix"}     # quote "5.1"
+  loudness:
+    standard: "ATSC A/85"            # numbers (-24 LKFS +-2, -2 dBTP) live in the profile
+    program_track: 0                 # measured on the stereo full mix
+
+content:
+  captions: {required: true, formats: [embedded_608]}   # EDIT: false if captions travel as a sidecar

@@ -1,0 +1,13 @@
+# Internal review renders that carry temp or unfinished audio (comp/edit reviews). Loudness is not
+# judged; colour tag / range mismatches (e.g. a full-range H.264 encode) are information only.
+profile_version: 1
+name: review_internal
+extends: review
+description: Internal review renders - like review, loudness off, colour tag/range mismatches info.
+checks:
+  audio.loudness:
+    enabled: false
+  video.color:
+    severity: info               # primaries/transfer/matrix mismatch: info
+    key_severity: {range: info}  # range mismatch (full-range review encodes): info
+    unknown_severity: info

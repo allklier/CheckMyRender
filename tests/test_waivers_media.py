@@ -34,7 +34,7 @@ def media():
 def check(f, out, *extra):
     rc = main(["check", str(f), "--profile", "final", "--spec", SPEC, "--report", "json",
                "-o", str(out), *extra])
-    return rc, json.loads((out / "cmr_report.json").read_text())
+    return rc, json.loads((out / "cmr_report_latest.json").read_text())
 
 
 def of(rep, check_id):
@@ -45,7 +45,7 @@ def test_black_run_waived_then_content_changed(media, tmp_path, capsys):
     rc, rep = check(media["wv_black"], tmp_path / "r1")
     assert rc == 2 and [f["severity"] for f in of(rep, "video.black_runs")] == ["FAIL"]
     wfile = tmp_path / "waivers.yaml"
-    assert main(["waive", str(tmp_path / "r1" / "cmr_report.json"), "--all-check",
+    assert main(["waive", str(tmp_path / "r1" / "cmr_report_latest.json"), "--all-check",
                  "video.black_runs", "--reason", "intended cut to black", "-o", str(wfile)]) == 0
 
     rc, rep = check(media["wv_black"], tmp_path / "r2", "--waivers", str(wfile))
@@ -54,7 +54,7 @@ def test_black_run_waived_then_content_changed(media, tmp_path, capsys):
     assert rc == 0 and rep["summary"]["exit_code"] == 0
     assert f["severity"] == "PASS" and f["raw_severity"] == "FAIL" and f["waiver_ref"] == "W0001"
     assert f["waiver"]["reason"] == "intended cut to black" and f["waiver"]["distance"] == 0
-    assert rep["summary"]["counts"]["WAIVED"] == 1 and rep["schema_version"] == "1.2"
+    assert rep["summary"]["counts"]["WAIVED"] == 1 and rep["schema_version"] == "1.4"
     assert [w["id"] for w in rep["waivers"]["applied"]] == ["W0001"]
     assert "WAIVED  video.black_runs" in out and "WAIVED 1" in out   # never hidden
 
@@ -77,7 +77,7 @@ def test_audio_clipping_waived(media, tmp_path):
     clip = of(rep, "audio.clipping")
     assert clip and all(f["severity"] == "FAIL" for f in clip)
     wfile = tmp_path / "w.yaml"
-    assert main(["waive", str(tmp_path / "r1" / "cmr_report.json"), "--all-check",
+    assert main(["waive", str(tmp_path / "r1" / "cmr_report_latest.json"), "--all-check",
                  "audio.clipping", "--reason", "accepted", "-o", str(wfile)]) == 0
     fp = __import__("yaml").safe_load(wfile.read_text())["waivers"][0]["fingerprint"]
     assert fp["type"] == "audio_envelope" and max(c[0] for v in fp["values"] for c in v) == 0.0
@@ -90,7 +90,7 @@ def test_audio_clipping_waived(media, tmp_path):
     allf = [x for fi in rep["files"] for x in fi["findings"]]
     n = 1 + next(i for i, x in enumerate(allf) if x["check_id"] == "audio.loudness"
                  and x["evidence"][0]["kind"] == "integrated")
-    assert main(["waive", str(tmp_path / "r2" / "cmr_report.json"), "--finding", str(n),
+    assert main(["waive", str(tmp_path / "r2" / "cmr_report_latest.json"), "--finding", str(n),
                  "--reason", "loud on purpose", "-o", str(wfile)]) == 0
     rc, rep = check(media["wv_clip"], tmp_path / "r3", "--waivers", str(wfile))
     loud = {x["evidence"][0]["kind"]: x for x in of(rep, "audio.loudness")}
@@ -102,8 +102,8 @@ def test_waive_rejects_metadata_finding_and_lists(media, tmp_path, capsys):
     out = Path(media["wv_black"]).parents[1]
     f = make_media.make(out, "no_captions", captions=False)
     check(f, tmp_path)
-    rep = json.loads((tmp_path / "cmr_report.json").read_text())
+    rep = json.loads((tmp_path / "cmr_report_latest.json").read_text())
     n = 1 + [x["check_id"] for x in rep["files"][0]["findings"]].index("captions.presence")
-    assert main(["waive", str(tmp_path / "cmr_report.json"), "--finding", str(n),
+    assert main(["waive", str(tmp_path / "cmr_report_latest.json"), "--finding", str(n),
                  "--reason", "x", "-o", str(tmp_path / "w.yaml")]) == 3
-    assert main(["waive", str(tmp_path / "cmr_report.json")]) == 0   # listing mode
+    assert main(["waive", str(tmp_path / "cmr_report_latest.json")]) == 0   # listing mode

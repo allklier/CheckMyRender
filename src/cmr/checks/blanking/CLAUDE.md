@@ -60,6 +60,7 @@ neighbour step >= 7 (synthetic dark content) up to ~150. Deeper planted bands ar
 | fast_frame_step | 5 | quality fast: 1 in N frames |
 | merge_gap_frames | 250 | dark_edge / matte runs of one edge closer than this merge (10 s at 25p) |
 | dark_edge_mode | flag | flag / info / hide for `dark_edge` findings |
+| exclude_segments | [slate, bars_tone, two_pop] | head/tail layout segments (spec, D7) not judged: a vignetted slate would read as dark_edge (D27); bars and 2-pop cards have black edge areas by design (user decision; was [slate]) |
 | class_severity | edge, edge_persistent, dark_edge, dark_edge_persistent FAIL; matte WARN; matte_persistent INFO | capped by profile `severity` |
 
 ### Results

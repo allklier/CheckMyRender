@@ -29,13 +29,12 @@ roadmap and design decisions.
 - Results: console plus JSON report. Exit code 0 pass, 1 warn, 2 fail, 3 tool/config error.
 
 ## Quick start
-Needs Python 3.12+, ffmpeg and ffprobe (developed against ffmpeg 6.1.1). Python dependencies
-(PyYAML, jsonschema) go into a virtual environment:
+Needs Python 3.12+, ffmpeg and ffprobe (tested with ffmpeg 6.1.1 and 5.1.10). Never change the system
+Python on a production machine: use a conda environment (a plain venv also works on a dev machine):
 
 ```
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
+conda create -p ./env python=3.12     # then: conda activate ./env
+pip install -e .                      # editable install: profile lookup needs the source tree
 cmr doctor
 cmr check render.mov --profile release --spec examples/spec_hd_broadcast.yaml
 cmr check render.mov --profile review --spec examples/spec_review.yaml --report json -o reports/
@@ -49,10 +48,20 @@ uses fewer ffmpeg threads and caps memory, for use while other apps (e.g. Flame)
 Reviewed findings can be waived (`cmr waive`, per finding or per check category with a severity ceiling) and
 reports list at most 10 findings per check (`--max-findings`); suppressed ones are counted, not ignored.
 
+Problems? `cmr logs collect` writes a support bundle (no private data by default).
+
 Other commands: `cmr probe FILE`, `cmr profiles list`, `cmr profiles show NAME --spec SPEC`.
 
 ## Layout
 `src/cmr/` code, `profiles/` rules, `examples/` sample specs, per-folder `CLAUDE.md` design notes, `tests/` tests
 (`CMR_TEST_MEDIA=<dir> python3 -m pytest -q`; test media is generated with ffmpeg, not stored).
 
-More detail: [USERGUIDE.md](USERGUIDE.md) (stub). License: MPL 2.0 ([LICENSE](LICENSE)).
+## Documentation
+- [USERGUIDE.md](USERGUIDE.md): platform requirements, three quick starts (any render, a slated ad
+  spot, accepting a reviewed finding), then reference: running checks, reading results, profiles, spec
+  sheets, every check and its parameters, tuning, waivers, overnight batches, slate checks,
+  troubleshooting, glossary; installation on Rocky Linux (conda, Python 3.12) is the last section.
+- [templates/](templates/README.md): commented starter spec sheets, profiles, a waiver file, slate job
+  files (in development) and an overnight batch script to copy and edit.
+
+License: MPL 2.0 ([LICENSE](LICENSE)).

@@ -1,0 +1,14 @@
+# Slate field values for tests/slate/make_spot.py. FICTIONAL names only (this file is tracked).
+# Real-client values live in a private values file outside the repo (same keys).
+# TITLE is a template: {seconds} = program length in seconds (60, or 03 with --short),
+# {ad_id}, {resolution} (WIDTHxHEIGHT). The filename is TITLE + ".mov".
+# DURATION (":60") and DATE (render date, YYYYMMDD) are derived, not set here.
+agency: Northwind Advertising
+client: Sample Burgers
+product: ""
+title: "SB X League 2026_ProRes Generic Submaster_QB Pat_{seconds}_{ad_id}_{resolution}_Slated"
+ad_id: ABCD1234567H
+audio: Stereo
+artist: Alex Example
+misc: edit-bay-03
+logo: NW

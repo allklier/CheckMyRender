@@ -22,9 +22,15 @@ checks:
   video.scan:
     expect: "${spec.video.scan}"
     unknown_severity: warn
+  video.field_order:              # optional spec video.field_order: progressive|tt|bb|tb|bt (absent = not checked)
+    video: "${spec.video}"
+    unknown_severity: warn
+  container.op:                   # optional spec video.operational_pattern, MXF only (e.g. OP1a)
+    video: "${spec.video}"
   video.color:
     expect: "${spec.video.color}"
     unknown_severity: warn        # ProRes-in-MOV never reports color_range via ffprobe
+    # key_severity: {range: info}  # per-key mismatch severity (primaries|transfer|matrix|range)
   audio.format:
     codec: "${spec.audio.codec}"
     sample_rate: "${spec.audio.sample_rate}"
@@ -53,15 +59,17 @@ checks:
     severity: fail
     dark_edge_mode: flag          # dark picture at an edge (class dark_edge): flag | info | hide
   audio.loudness:                 # BS.1770 relative-gated over the program range (not dialogue-gated)
-    loudness: "${spec.audio.loudness}"    # spec names the standard + program_track only
+    loudness: "${spec.audio.loudness}"    # spec: standard + program_track or programs (merged streams, LFE not measured)
     standards:                    # numbers per standard live here, not in the spec
       "EBU R128": {target_lufs: -23, tolerance_lu: 1, true_peak_max_dbtp: -1}
       "ATSC A/85": {target_lufs: -24, tolerance_lu: 2, true_peak_max_dbtp: -2}
     # lra_max_lu: 20              # optional loudness-range limit
   audio.silence:                  # dead zones in the program range, every audio stream
+    audio: "${spec.audio}"        # optional spec audio.allowed_silence (declared intended silence)
     threshold_dbfs: -60           # frame is silent when all channels peak below this
     max_run_frames: 12            # ~0.5 s at 24p
   audio.silent_channel:
+    audio: "${spec.audio}"        # optional spec audio.allowed_silence (declared intended silence)
     threshold_dbfs: -60           # channel peak below this for the whole program
   audio.clipping:
     clip_dbfs: -0.1               # per-frame sample peak at/above this = clipping

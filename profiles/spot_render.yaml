@@ -1,0 +1,22 @@
+# Spots right after a render in Flame (D27): quick idiot check before anything else happens.
+# Technical consistency (codec, size, fps, colour, audio format/layout), head/tail layout and
+# timecode, filename, decode errors and "is there a slate" only; content checks are off.
+# Short report: at most 5 findings per check.
+profile_version: 1
+name: spot_render
+extends: spot_review
+description: Spot right after render - technical settings, layout, filename, decode, slate present.
+checks:
+  video.blanking: {enabled: false}
+  video.black_runs: {enabled: false}
+  audio.loudness: {enabled: false}
+  audio.silence: {enabled: false}
+  audio.silent_channel: {enabled: false}
+  audio.clipping: {enabled: false}
+  captions.presence: {enabled: false}
+  slate.consistency: {enabled: false}
+  slate.content: {enabled: false}
+  slate.claims: {enabled: false}
+  slate.bars: {enabled: false}
+  slate.present: {quality: fast, max_findings: 5}
+  decode.errors: {max_findings: 5}

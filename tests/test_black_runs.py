@@ -33,7 +33,7 @@ def media():
 
 def findings(tmp_path, f):
     main(["check", str(f), "--profile", "final", "--spec", SPEC, "--report", "json", "-o", str(tmp_path)])
-    rep = json.loads((tmp_path / "cmr_report.json").read_text())
+    rep = json.loads((tmp_path / "cmr_report_latest.json").read_text())
     return [x for x in rep["files"][0]["findings"] if x["check_id"] == "video.black_runs"]
 
 

@@ -1,0 +1,14 @@
+#!/bin/bash
+# Fake curl: FAKE_CURL_FAIL=1 fails; -o FILE writes a fake Miniforge installer (or its .sha256;
+# FAKE_SHA_BAD=1 writes a wrong hash).
+echo "curl $*" >>"$FAKE_CALLS"
+[ -n "${FAKE_CURL_FAIL:-}" ] && { echo "curl: (6) Could not resolve host" >&2; exit 6; }
+out=""; url=""
+while [ $# -gt 0 ]; do case $1 in -o) out=$2; shift;; http*) url=$1;; esac; shift; done
+[ -z "$out" ] || [ "$out" = /dev/null ] && exit 0
+body() { printf '#!/bin/bash\n# fake miniforge\nwhile [ $# -gt 0 ]; do [ "$1" = -p ] && p=$2; shift; done\nmkdir -p "$p/bin"; cp "$FAKES/conda" "$p/bin/conda"; chmod +x "$p/bin/conda"\n'; }
+case $url in
+    *.sha256) if [ -n "${FAKE_SHA_BAD:-}" ]; then echo "0000  Miniforge3-Linux-x86_64.sh" >"$out"
+              else echo "$(body | sha256sum | cut -d' ' -f1)  Miniforge3-Linux-x86_64.sh" >"$out"; fi;;
+    *) body >"$out";;
+esac

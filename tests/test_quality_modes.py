@@ -109,7 +109,7 @@ def black_media():
 def check(tmp_path, f, profile):
     rc = main(["check", str(f), "--profile", str(profile), "--spec", SPEC,
                "--report", "json", "-o", str(tmp_path)])
-    rep = json.loads((tmp_path / "cmr_report.json").read_text())
+    rep = json.loads((tmp_path / "cmr_report_latest.json").read_text())
     jsonschema.validate(rep, REPORT_SCHEMA)
     return rc, rep["files"][0]["findings"]
 

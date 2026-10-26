@@ -8,6 +8,7 @@ from cmr.engine import Check, ConfigError, Tap, register
 from . import detector
 
 _NUM = {"type": "number", "minimum": 0}
+EXCLUDE_SEGMENTS = ("slate", "bars_tone", "two_pop")   # user decision (gap fix)
 _SEV = {"type": "string", "enum": ["pass", "info", "warn", "fail"]}
 
 
@@ -32,6 +33,9 @@ class Blanking(Check):
             "fast_frame_step": {"type": "integer", "minimum": 1},
             "merge_gap_frames": {"type": "integer", "minimum": 0},
             "dark_edge_mode": {"enum": list(detector.DARK_EDGE_MODES)},
+            # head/tail layout segments (D7) not judged; default slate, bars_tone, two_pop:
+            # a vignetted slate reads as dark_edge, bars/2-pop cards have black edge areas
+            "exclude_segments": {"type": "array", "items": {"type": "string"}},
             "class_severity": {
                 "type": "object", "additionalProperties": False,
                 "properties": {k: _SEV for k in detector.DEFAULTS["class_severity"]},
@@ -50,6 +54,11 @@ class Blanking(Check):
                 for name, chain in detector.chains(ctx.params, self._step(ctx)).items()]
 
     def detect(self, ctx, records):
+        skip = [s for s in ctx.timeline.segments
+                if s["type"] in ctx.params.get("exclude_segments", EXCLUDE_SEGMENTS)]
+        if skip:
+            records = {k: [r for r in v if not any(s["start"] <= r.frame <= s["end"] for s in skip)]
+                       for k, v in records.items()}
         return detector.detect(detector.stats_from_records(records), ctx.params,
                                stream=ctx.media.video[0]["index"], frame_step=self._step(ctx))
 

@@ -1,0 +1,14 @@
+# Finished web / online deliverables (platform upload files). Release rules plus an online
+# loudness preset. -16 LUFS / -1 dBTP is a common online target, not a single published standard:
+# the spec names the preset per job.
+profile_version: 1
+name: web_delivery
+extends: release
+description: Web/online deliverables - release rules with an online loudness preset.
+checks:
+  audio.loudness:
+    standards:
+      "Web -16": {target_lufs: -16, tolerance_lu: 1, true_peak_max_dbtp: -1}
+  video.color:
+    severity: warn               # primaries/transfer/matrix mismatch warns
+    key_severity: {range: warn}  # range mismatch (e.g. full-range encode): warn

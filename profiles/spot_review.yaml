@@ -1,0 +1,38 @@
+# Spots before agency/client review (D27). Needs a spec + job file (`--job`): the slate checks
+# read ${spec.slate}, ${spec.job} and ${spec.deliverables}. Technical checks as `final`, plus the
+# slate checks; blanking and black runs in fast mode; loudness and bars only warn; an AD-ID,
+# TITLE (wrong slate / renamed file) or DURATION mismatch fails.
+profile_version: 1
+name: spot_review
+extends: final
+description: Spot review renders - slate read and verified, AD-ID/duration gate, loudness and bars warn.
+checks:
+  filename:
+    deliverables: "${spec.deliverables}"          # {row.*}/{file.*} in job.naming_pattern
+    tags:
+      resolution: "${spec.video.width}x${spec.video.height}"
+  video.blanking:
+    quality: fast
+    dark_edge_mode: info
+  video.black_runs:
+    quality: fast
+  audio.loudness:
+    severity: warn
+  slate.present:
+    slate: "${spec.slate}"
+  slate.consistency:
+    slate: "${spec.slate}"
+  slate.content:
+    slate: "${spec.slate}"
+    job: "${spec.job}"
+    deliverables: "${spec.deliverables}"
+    severity: warn                                 # other fields (CLIENT, ARTIST ...) warn
+    field_severity: {AD-ID: fail, TITLE: fail, row: fail}
+    date: {mode: window, format: YYYYMMDD, window_days: 30, severity: warn}
+  slate.claims:
+    slate: "${spec.slate}"
+    severity: fail                                 # duration / audio / resolution claims
+  slate.bars:
+    slate: "${spec.slate}"
+    severity: warn
+    tolerance: 2                                   # 8-bit code values; H.264 4:2:0 may need ~4

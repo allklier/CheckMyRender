@@ -44,7 +44,7 @@ def amedia():
 def run(tmp_path, f, profile="final", spec=SPEC):
     rc = main(["check", str(f), "--profile", str(profile), "--spec", str(spec),
                "--report", "json", "-o", str(tmp_path)])
-    rep = json.loads((tmp_path / "cmr_report.json").read_text())
+    rep = json.loads((tmp_path / "cmr_report_latest.json").read_text())
     jsonschema.validate(rep, REPORT_SCHEMA)
     return rc, [x for x in rep["files"][0]["findings"] if x["check_id"].startswith("audio.")]
 

@@ -1,18 +1,71 @@
 # src/cmr/checks - check plugins
 
 Every module here is auto-imported by `engine.load_checks()`. Contract: `../CLAUDE.md`.
-Blanking has its own folder: `blanking/CLAUDE.md`. Decisions: ../../../CLAUDE.md.
+Blanking has its own folder: `blanking/CLAUDE.md`; the slate checks (D27): `slate/CLAUDE.md`. Decisions: ../../../CLAUDE.md.
 
 ## Metadata checks
 Check ids (profiles/final.yaml): container.format, video.codec (codec + profile via value map),
 video.resolution (w/h, pixel aspect, display aspect), video.pixel_format, video.fps (r_frame_rate
 and avg_frame_rate, exact rational), video.scan, video.color (unknown -> unknown_severity),
 audio.format (codec/sample rate/bit depth per stream), audio.layout (stream count + channels per
-spec track), filename (explicit filename beats naming_pattern), timing.frame_count (program
+spec track), filename (explicit filename beats naming_pattern; D27: `{row.*}`/`{file.*}`/`{job.*}`
+placeholders with the deliverables row, see slate/CLAUDE.md), timing.frame_count (program
 frames = file - head - tail), timing.layout (layout fits; first program frame TC ==
 program_start_timecode), timing.timecode_start (embedded TC + DF/NDF vs spec, derived if no
-file_start_timecode), captions.presence (embedded_608/708 only), decode.errors.
+file_start_timecode), captions.presence (embedded_608/708, vanc_436m), decode.errors,
+video.field_order and container.op (optional spec keys). video.fps: NTSC-equivalent rule below.
 Profiles: `final`, `review` and `release` (both extend final).
+
+### Probe/metadata/captions gap fixes (2026-10-26; tests `tests/unit/test_probe_gaps.py`, `tests/test_probe_gaps_media.py`)
+- Start timecode: a stream `timecode` tag (MOV tmcd/video), else the FORMAT tag (MXF material
+  package; ffmpeg writes MXF timecode only there, and so did both real MXF masters).
+  `media.timecode_source` = `stream N` | `format`, named in the timing.timecode_start message.
+  DF/NDF from ';' vs ':' as before.
+- video.fps: exact match passes; an NTSC-equivalent rational (`timecode.fps_equivalent`: same
+  `round(fps x 1001/1000)` AND < 0.001 fps apart) passes with ONE INFO finding per field
+  (r_frame_rate / avg_frame_rate) naming both values. 2997/125 == 24000/1001, 2997/100 ==
+  30000/1001, 5994/100 == 60000/1001; 24 != 23.976, 30 != 29.97, 25 != 24. Time model (D6)
+  unchanged: Timeline/frame numbers use the probe's exact value (2997/125 -> nominal 24 TC,
+  frames = pts x time base x 2997/125; differs from 24000/1001 by 1e-6 relative, < 0.1 frame
+  per hour, and both the frame number and the TC come from the same value). One change:
+  drop-frame is now accepted for any rate within 0.001 fps of 30000/1001 or 60000/1001
+  (`timecode.is_ntsc`), so an Avid 2997/100 DF file no longer falls back to non-drop.
+- video.color: `key_severity: {primaries|transfer|matrix|range: SEV}` sets the severity of a
+  MISMATCH per key (others: check severity; untagged: `unknown_severity`); unknown key or
+  severity = configuration error. `yuvj420p/422p/444p/440p/411p` are mapped in media.py to the
+  base format (`pixel_format`, ffprobe name kept in `pixel_format_raw`) plus range `pc` when
+  the stream has no range tag (`color_source.color_range = pixel_format`), so a full-range
+  H.264 is reported once, by video.color range, not also by video.pixel_format.
+- video.field_order (new): params `video: "${spec.video}"`, `unknown_severity` (warn); spec
+  `video.field_order` progressive|tt|bb|tb|bt (ffprobe values; tt = top field first, bb =
+  bottom first, tb/bt = coded/displayed differ); absent = not checked (PASS, like other
+  optional metadata values); other value = configuration error.
+- container.op (new): params `video: "${spec.video}"`; spec `video.operational_pattern`
+  (OP1a.., OPAtom; '-' and case ignored); absent = not checked; non-MXF file = SKIPPED. Value from
+  format tag `operational_pattern_ul` (byte 13 item 1-3, byte 14 package 1-3 -> a/b/c, byte 13
+  0x10 = OPAtom).
+- video.codec profile: DNxHR 'DNXHR HQ' -> 'DNxHR HQ' (LB/SQ/HQ/HQX/444). DNxHD ('DNXHD' in
+  ffprobe) -> class from the first frame's `pkt_size` (fixed per CID) x fps x 8 = Mbps, nearest
+  Avid name (36 45 60 75 80 90 100 110 115 120 145 175 185 220 240 290 350 365 440) within 5 %,
+  else the rounded Mbps; `x` for 10-bit pix_fmt: 917504 B @23.976 = 'DNxHD 175' / '175x',
+  @25 = 185, @29.97 = 220; 606208 B = 115; 188416 B = 36. Fallback: stream bit_rate (MOV).
+- audio: channel_layout missing (MXF PCM) with 2 channels -> 'stereo',
+  `channel_layout_source: inferred` (1 channel stays 'unknown': not asked; the check uses channel
+  counts anyway).
+- captions.presence formats: `embedded_608` (MOV c608, A53, or 436M 608: CDP cc_type 0/1 valid
+  or a SMPTE 334-1 DID 0x61/SDID 0x02 packet), `embedded_708` (A53, or 436M CDP with valid
+  DTVCC cc_type 2/3), `vanc_436m` (a 436M track with a CDP or 334-1 packet). 436M: media.py
+  calls `vanc.read_436m` for each data stream tagged `data_type: vbi_vanc_smpte_436M`:
+  `ffprobe -select_streams N -show_packets -show_data -read_intervals %+#30` (first 30 packets,
+  ~1 s; 0.3-0.8 s on a 26 GB master, 6.1.1 and 5.1.10 same counts), hexdump parsed, CDP header
+  parsed; only counts kept (`media.data[].captions_436m`: packets_read, anc_packets, cdp,
+  cdp_active, cc608_valid, cc608_nonnull, cc708_valid, s334_608), never caption text; counts are
+  the finding evidence. A 436M track that cannot be read -> ERROR "not verified", not FAIL.
+  Limits: captions are looked for only in the first 30 frames (a track whose CDPs start later,
+  or carry only padding there, reads as missing 708 / 608: cc608_valid counts valid 608 bytes
+  incl. null padding, which encoders mark valid); 10-bit 436M sample coding (7/8/9) parsed but
+  UNVERIFIED (no file); no 436M can be generated with ffmpeg 6.1/5.1, so the parser is tested on
+  hand-built bytes and the reader command on a MOV tmcd data stream.
 
 ## video.black_runs
 `src/cmr/checks/black_runs.py`, tests `tests/test_black_runs.py`, `tests/test_quality_modes.py`.
@@ -25,8 +78,47 @@ run length > profile `max_black_run_frames` (required; final.yaml sets 12). Seve
 `severity` (default fail). Finding gives frame range + timecode + actual run length.
 Registration/profile change outside the check: one entry `video.black_runs` in profiles/final.yaml.
 Edge black borders stay with video.blanking. Not verified: behaviour on real-world noisy/film-grain
-black (YHIGH threshold may need tuning), logo-over-black (90th percentile ignores a small logo);
-a frame missing from the signalstats output breaks a run.
+black (YHIGH threshold may need tuning); a frame missing from the signalstats output breaks a run.
+
+### Content on black (logo / end card / credits; user decision: not a black run)
+- Params (profile, all optional): `content_on_black` (bool, default true), `content_luma`
+  (8-bit tv code, default 100), `content_min_fraction` (default 0.0001 = 0.01% of the frame,
+  207 px at 1080p). A dark frame (YHIGH <= black_luma) whose share of pixels above
+  `content_luma` is >= `content_min_fraction` is content, not black.
+- Second tap (same in fast and high; full-resolution threshold so 1-2 px strokes count):
+  `lutyuv=y='if(gt(val,minval+(T-16)*(maxval-minval)/219),maxval,minval)',scale=iw/4:ih/4:flags=area+accurate_rnd,format=yuv420p,signalstats`,
+  key YAVG; fraction = (YAVG-16)/219. Verified: lutyuv minval/maxval follow the input range
+  (yuv420p 16/235, 10-bit 64/940, 12-bit 256/3760, yuvj420p and gray 0/255; measured with
+  signalstats); a 1/32 white box gave YAVG 22.8438 (= 16 + 219/32) on yuvj420p, yuv420p,
+  yuv422p10le and yuv444p12le. signalstats prints YAVG with 6 significant digits (resolution
+  ~5e-7 of the frame). `ffmpeg -h filter=lutyuv` (y/u/v expressions; the val/minval/maxval
+  constants are not listed by -h, verified by the runs above). `blackframe` was rejected
+  (integer percent, prints only frames above `amount`).
+- Cost (1440 frames 1080p ProRes HQ, single pass): black high 9.6 s -> 10.5 s with the content
+  tap; fast 1.47 -> 2.31 s; the tap alone 1.67 s (decode 0.78). Thresholding after the
+  quarter-res downscale would save ~0.15 s but loses thin text (a 1 px line averages to ~71).
+- Report: raw dark runs longer than the limit that contained content frames give ONE INFO
+  finding each, evidence `kind: content_on_black`, `dark_run_frames`, `content_frames`,
+  `content_ranges`, `max_content_fraction`, `black_runs_left` (pure-black pieces still judged
+  and reported as usual, e.g. a logo followed by 16 black frames -> INFO + FAIL on the black
+  piece). The kind keeps waivers of the two apart.
+- Measured on real material (end-of-file excerpts only, two MXF masters; signalstats tv codes):
+  logo end card (DNxHD 1080p 23.976): YHIGH 16, YMAX 235, bright share 0.93% (51 frames);
+  scrolling credits on black (MPEG-2 1080i 29.97, 1029 frames): YHIGH 16-18 (high), YMAX
+  212-222 (fast 168-211), share 0.14-7.3% (minimum 0.142% when the last line scrolls out);
+  true digital black in the same file: YMAX 16, share 0; a 3-frame dip through near-black:
+  YMAX 16-92, share 0. So 100 / 0.01% sits between fades (<= 92) and text (>= 168 fast, 212
+  high), with a 14x margin under the sparsest credits frame. Before -> after on those excerpts:
+  logo 93-143 FAIL -> INFO; credits 0-1028 FAIL (fast: three runs) -> INFO; the 30-frame true
+  black run stays FAIL. Fast mode: quarter-res YHIGH on dense credits rose to 65-71 (already
+  not black), sparse credits stay dark and are excused by the content tap.
+- Synthetic (tests/test_black_content.py, high and fast identical): 200x100 logo on black
+  30-49 FAIL -> INFO; three 2 px x 400 px moving lines (0.12%) FAIL -> INFO; logo 30-44 +
+  black 45-60: FAIL 30-60 -> INFO 30-60 + FAIL 45-60; fade-out to black 40-71 FAIL (unchanged);
+  true black 30-49 FAIL (unchanged); `content_min_fraction: 0.005` makes the credits a FAIL again.
+- Limits: a dim logo (all of it <= content_luma, e.g. grey 60) still counts as black (raise
+  sensitivity by lowering `content_luma`); a hot-pixel cluster >= 0.01% would excuse a black
+  frame (not seen on real material); real film grain on black not measured.
 
 ## Audio content checks
 `src/cmr/checks/audio_content.py`; tests `tests/unit/test_audio_content.py` (no media),
@@ -35,7 +127,7 @@ a frame missing from the signalstats output breaks a run.
   start = program_start*sr/fps, end = (program_end+1)*sr/fps, rounded half-up. No program
   range (layout does not fit) -> SKIPPED.
 - audio.loudness: tap `atrim,ebur128=metadata=1:peak=true` on the spec's
-  `audio.loudness.program_track`. I/LRA from the last 100 ms record, true peak = running max
+  `audio.loudness.program_track` (or one tap per `programs` entry, below). I/LRA from the last 100 ms record, true peak = running max
   (linear, 3 decimals -> 20*log10). Spec names `standard`; profile `standards` presets hold
   target_lufs / tolerance_lu / true_peak_max_dbtp (final: EBU R128 -23 +-1 / -1 dBTP,
   ATSC A/85 -24 +-2 / -2 dBTP); optional `lra_max_lu`. Every message says "BS.1770
@@ -44,6 +136,40 @@ a frame missing from the signalstats output breaks a run.
   the ceiling (frame range of that block). Unknown standard -> ERROR.
   Each loudness problem finding's evidence[0] carries `kind` (`integrated`, `true_peak`, `lra`)
   so a waiver of one does not cover the others (D17, src/cmr/CLAUDE.md "Waivers").
+- Multi-stream programs (PBS-style masters: 8 mono streams, 1-6 = L R C LFE Ls Rs, 7-8 = stereo):
+  spec `audio.loudness.programs: [{name, streams: [positions among audio streams, 0-based],
+  channels: [L R C LFE Ls Rs M -]}]` (instead of `program_track`; both = config error).
+  `channels` names every merged channel in order (default: 2 ch L R, 6 ch L R C LFE Ls Rs; one
+  mono stream without channels = as program_track; other counts need `channels`). One tap per
+  program: each stream `atrim`, `amerge=inputs=N` in order, `pan=<layout>|FL=c0|...` keeping the
+  measured channels (L FL, R FR, C/M FC, Ls SL, Rs SR) - LFE and `-` are dropped BEFORE ebur128.
+  Why dropped, measured (ffmpeg 6.1.1, 1 kHz -20 dBFS on one channel): ebur128 weights FL 1.0
+  (-23.0 LUFS), BL/SL 1.41 (-21.5), LFE 0 (-70 = gated) when the layout names it (also a bare
+  6-channel `amerge` output, read as 5.1), BUT its true peak still includes the LFE (-20 dBFS
+  reported for an LFE-only signal). Each program gives its own finding(s); the finding stream =
+  the program's first stream, evidence `program`, `streams`, `channels`, `measured_channels`.
+  Tap names `r128` (first program) and `r128_<i>`. Engine: `Tap.inputs` (extra streams,
+  `[in1]`.. in the chain; build_graph splits shared streams). Verified: `ffmpeg -h filter=amerge`
+  (inputs), `-h filter=pan`, `-h filter=join` (channel_layout, map), mono MXF/MOV PCM streams
+  probe as 1 ch `unknown` layout and amerge + pan works on them.
+  Cross-check (tests/test_audio_multistream.py, mov and mxf): tone at -28.64 dBFS on L R C Ls
+  Rs + 60 Hz at -1 dBFS on LFE: cmr 5.1 = -24.0 LUFS (analytic -24.0), true peak -28.6 dBTP;
+  independent ffmpeg CLI `join` 5.0(side) + ebur128 summary: -24.0 / -28.6; same with LFE in a
+  5.1(side) layout: -24.0 LUFS but peak -1.0 dBFS (what LFE exclusion avoids). Stereo mix
+  streams 7-8 at -24 dBFS: -24.0 LUFS. `program_track: 6` (one mono stream) = -27.0 (single
+  channel, unchanged behaviour).
+- Declared intended silence: `allowed_silence: [{stream (position, 0-based), channels: [1-based]
+  (omitted = all), start, end (timecode, inclusive; omitted = program start/end)}]`, from the spec
+  (`audio.allowed_silence`, reaching the checks via param `audio: "${spec.audio}"` in final.yaml)
+  and/or the profile param `allowed_silence` (both lists are used). A stream not in the file is
+  ignored (logged). silence: declared channels are left out of the per-frame test, a frame
+  with every channel declared is not judged; a raw run > max_run_frames that lost frames to the
+  declaration gives ONE INFO `kind: declared_silence` (`declared_frames`). silent_channel:
+  frames in a declared range are not looked at; a channel declared for the whole program that
+  is silent -> one INFO per stream (`kind: declared_silence`, `channels`); a partly declared
+  channel that is silent everywhere else still FAILs. Declared channels that carry sound are
+  not reported (no "should be silent" check). The silence checks measure the program only, so
+  a silent head needs no declaration.
 - audio.silence / silent_channel / clipping: tap per audio stream
   `atrim,asetnsamples=n=floor(sr/fps):p=0,astats=metadata=1:reset=1:measure_perchannel=Peak_level:measure_overall=none`
   -> per-frame per-channel sample peak. Frame of chunk k = floor((start + k*n)*fps/sr) from
@@ -80,8 +206,8 @@ a frame missing from the signalstats output breaks a run.
      "configuration error: standard ... has no preset" (test
      `test_loudness_unknown_standard_is_configuration_error`).
 - Not verified / limits: non-48k-multiple rates (sr/fps not an integer, e.g. 29.97) attribute
-  chunks with < 1 frame spill (unit-tested arithmetic only, no 29.97 media); 5.1/7.1 channel
-  weighting in ebur128 (no multichannel media); mono program tracks are measured as single
+  chunks with < 1 frame spill (unit-tested arithmetic only, no 29.97 media); 7.1 / Lss-Rss
+  layouts (no channel names for them yet); real multi-stream masters (synthetic only); mono program tracks are measured as single
   channel (no `dualmono`); integrated value compared unrounded (3 decimals) to target +- tolerance;
   true-peak location precision = 100 ms block; R128 file-based tolerance is often +-0.5 LU (set
   +-1 per request, profile-tunable); A/85 -2 dBTP ceiling is an assumption (request gave only
@@ -239,8 +365,8 @@ smaller (UNVERIFIED, no real renders here).
   the check off in the profile (`timing.timecode_start: {enabled: false}`) instead of changing the check.
 
 ## Known problems and limits
-- audio `merge` (Flame mono-per-channel streams) mentioned in the example spec comment is not
-  implemented; layouts other than mono/stereo/5.1/7.1 -> SKIPPED.
+- Mono-per-channel streams are merged for loudness only (`audio.loudness.programs`); audio.layout
+  does not merge them; layouts other than mono/stereo/5.1/7.1 -> SKIPPED there.
 - Only the first video stream is checked.
 - Decode errors are not located to a frame (ffmpeg gives no frame number).
 - UNVERIFIED: whether the ProRes decoder derives frame color_range from the bitstream or

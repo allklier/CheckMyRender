@@ -1,0 +1,9 @@
+# Slate field values for tests/slate/make_spot.py --layout label_colon. FICTIONAL names only
+# (this file is tracked). ad_base = the Ad-ID BASE code shown on the slate; the filename is
+# ad_base + seconds + H (SBX01760H.mov). Title holds a colon and a slash on purpose (values may).
+# Length ("60s") and Date (render date, MM/DD/YYYY) are derived, not set here.
+ad_base: SBX017
+title: "Kickoff: Night 1/2"
+audio: Stereo
+agency: Northwind Advertising
+advertiser: Sample Burgers

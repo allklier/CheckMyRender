@@ -1,0 +1,54 @@
+# =====================================================================================
+# PROFILE TEMPLATE - colour / comp interim renders without audio (graded or log)
+# =====================================================================================
+# For picture-only hand-offs: no slate, no head/tail, no audio, no captions.
+# Pair it with templates/specs/spec_colour_interim_noaudio.yaml.
+#
+# What gates (FAIL): codec, raster, frame rate, pixel format, decode errors, sharp
+# blanking defects (the typical reposition/scale mistake), and an audio stream where
+# none is expected (audio.layout with `tracks: []` in the spec).
+# Information only: timing, timecode, colour tags, black runs (fades are normal in a cut).
+# Off: filename, captions, every audio content check.
+#
+# A switched-off check does not need its spec keys (`enabled: false` is enough), so the
+# no-audio spec loads although the stock profile `final` asks the spec for audio values.
+# Only audio.layout stays on: it needs the spec's `audio: tracks:` (an empty list there).
+#
+# Use:
+#   cmr check SHOT.mov --profile profiles/client_colour_interim.yaml \
+#       --spec specs/spec_colour_interim_noaudio.yaml
+# =====================================================================================
+profile_version: 1
+name: client_colour_interim
+extends: final
+description: Colour/comp interim, no audio - settings and sharp blanking gate; timing and tags info.
+checks:
+  filename:
+    enabled: false                   # interim names are free-form
+  captions.presence:
+    enabled: false
+  audio.format:
+    enabled: false                   # no audio streams: nothing to compare
+  audio.loudness:
+    enabled: false
+  audio.silence: {enabled: false}
+  audio.silent_channel: {enabled: false}
+  audio.clipping: {enabled: false}
+  # audio.layout stays ON: with `tracks: []` in the spec it FAILs if the file has audio.
+
+  timing.frame_count:
+    severity: info                   # interim length follows the edit
+  timing.layout:
+    severity: info
+  timing.timecode_start:
+    severity: info                   # source timecode is legitimate on interims
+  video.color:
+    severity: info                   # log renders are often tagged bt709; graded renders: set warn
+    unknown_severity: info
+  video.black_runs:
+    severity: info                   # fades to/from black are normal
+    quality: fast                    # quarter-resolution, every frame: enough for information
+  video.blanking:
+    severity: fail                   # sharp edge defects gate
+    quality: high                    # every frame: a 1-frame reposition error must not slip
+    dark_edge_mode: info             # dark picture edges listed, not gating. Log: use hide

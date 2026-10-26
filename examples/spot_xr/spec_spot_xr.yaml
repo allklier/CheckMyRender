@@ -1,0 +1,35 @@
+# Technical spec for a :60 spot, Extreme Reach short form (fictional job). Use with --job job.yaml
+# and one of the spot_* profiles. Job constants, deliverables CSV and slate live in job.yaml.
+spec_version: 1
+video:
+  container: mov
+  codec: prores
+  codec_profile: "422 HQ"
+  width: 1920
+  height: 1080
+  fps: "30000/1001"
+  scan: progressive
+  pixel_format: yuv422p10le
+  color: {primaries: bt709, transfer: bt709, matrix: bt709, range: tv}
+  aspect_ratio: "16:9"
+  pixel_aspect: 1.0
+timing:
+  timecode_mode: non-drop
+  program_start_timecode: "01:00:00:00"
+  program_duration_frames: 1800     # :60 = 60 timecode seconds x 30 frames
+  head_layout:                      # XR short form: 5 s slate, 2 s black, content from frame 210
+    - {type: slate, frames: 150}
+    - {type: black, frames: 60}
+    - {type: program}
+  tail_layout: []                   # XR short form: no tail black, no extra frames
+audio:
+  sample_rate: 48000
+  bit_depth: 24
+  codec: pcm_s24le
+  tracks:
+    - {index: 0, layout: stereo, content: "Stereo mix L/R"}
+  loudness:
+    standard: "ATSC A/85"           # -24 LKFS; numbers live in the profile
+    program_track: 0
+content:
+  captions: {required: false}

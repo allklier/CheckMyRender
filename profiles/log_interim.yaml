@@ -1,0 +1,16 @@
+# Log-encoded (scene-referred) interim renders, e.g. comps or plates handed back in camera log.
+# The picture never reaches legal black, so black-run and dark-edge logic is meaningless, and the
+# colour tags of such files usually say bt709 although the picture is log: tag checks are info.
+# Sharp blanking defects are still searched (a reposition leaves code-value-0 edges even in log).
+profile_version: 1
+name: log_interim
+extends: colour_interim
+description: Log-encoded interim renders - settings and sharp blanking only; colour tags and black runs info.
+checks:
+  video.color:
+    severity: info
+    unknown_severity: info
+  video.black_runs:
+    enabled: false               # lifted log blacks: a black run cannot occur, so do not spend the pass
+  video.blanking:
+    dark_edge_mode: hide         # dark log edges are picture, not defects; count kept in one summary

@@ -1,0 +1,19 @@
+# Job file for "Label: value" slated spots (fictional). Filename = Ad-ID base + length + H
+# (SBX01760H.mov); the slate shows the base code only. Composite key: the row is the one whose
+# Ad-ID base AND length equal the filename groups (D27 option A with a composite key).
+# A 2-digit code that is NOT the length (e.g. 31 = second :30 version) needs its own column
+# in the CSV and in the key instead of `length`.
+job_version: 1
+spec: spec_spot_xr.yaml             # run with --job job_label_colon.yaml (job.yaml is the default)
+job:
+  id: nw_sb_label_colon
+  agency: Northwind Advertising
+  advertiser: Sample Burgers
+deliverables:
+  csv: deliverables_label_colon.csv
+  columns: {ad_base: "Ad-ID", title: "Title", length: "Length"}
+  key: [ad_base, length]            # types by name: ad_base = ad_id (trailing H/D), length = duration
+  match: key
+  filename_regex: '(?P<ad_base>[A-Z]{2,4}\d{3})(?P<length>\d{2})?(?P<hd>[HD])\.mov'
+slate:
+  template: slates/xr_label_colon.yaml

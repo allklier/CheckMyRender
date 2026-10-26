@@ -1,0 +1,44 @@
+# =====================================================================================
+# SLATE TEMPLATE  (SLATE CHECKS: IN DEVELOPMENT)
+# =====================================================================================
+# Describes ONE slate design: a label column (right-aligned) and a value column
+# (left-aligned), colour bars along the top, grey steps along the bottom, a countdown
+# circle that is ignored. Make one template per slate design you use (per house,
+# per agency, per platform) and point job.yaml at it.
+#
+# Left-aligned "Label: value" slates: set `layout: label_colon` (example:
+# examples/spot_xr/slates/xr_label_colon.yaml). Not readable yet: centred values, values that wrap.
+#
+# fields:  LABEL: {aliases, type, optional, line, expect}
+#   aliases   other spellings of the label on the slate (AD-ID / ADID / AD ID)
+#   type      text (default) | title | id | duration | date | audio
+#             title: "_", "-" and spaces count as the same; id: look-alike characters
+#             (0/O, 1/I/l, 5/S, 2/Z, 8/B) are reported as INFO, not as a mismatch
+#   optional  true = the label may be missing from the slate
+#   expect    what the value must be; tokens {job.x} {row.x} {file.x} {file.stem};
+#             blank/absent = not checked; "<empty>" = must be empty.
+#             job.yaml `slate: expect:` overrides this per job.
+# countdown: box (fractions of the frame: x0 y0 x1 y1) whose text is ignored
+# bars:      where the colour bars and grey steps are; y_targets = 8-bit luma of each grey
+#            step, left to right (measure them once on a known-good render)
+# =====================================================================================
+template_version: 1                  # always 1
+name: slate_template                 # EDIT: e.g. house_standard
+
+fields:
+  AGENCY:   {expect: "{job.agency}"}
+  CLIENT:   {expect: "{job.client}"}
+  PRODUCT:  {expect: "{job.product}", optional: true}
+  TITLE:    {type: title, expect: "{file.stem}"}           # slate title = filename without .mov
+  AD-ID:    {aliases: [AD-ID, ADID, AD ID], type: id, expect: "{row.ad_id}"}
+  DURATION: {aliases: [DURATION, LENGTH], type: duration, expect: ":{row.length}"}
+  AUDIO:    {type: audio}            # checked against the actual audio by slate.claims
+  DATE:     {type: date}             # judged by the date rule in the profile
+  ARTIST:   {expect: "{job.artist}", optional: true}
+  MISC:     {optional: true}         # free text, not checked
+
+countdown: {x0: 0.78, y0: 0.68, x1: 0.94, y1: 0.94}
+
+bars:
+  colour: {band: top, segments: [white, yellow, cyan, green, magenta, red, blue, black]}
+  grey: {band: bottom, y_targets: [235, 204, 172, 141, 110, 79, 47, 16]}

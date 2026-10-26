@@ -43,16 +43,20 @@ import os
 import pkgutil
 import re
 import shutil
-import subprocess
 import tempfile
+import time
 import traceback
+from collections import Counter
 from dataclasses import dataclass, field
 from fractions import Fraction
 from pathlib import Path
 from typing import Callable
 
+import logging
+
 import jsonschema
 
+from . import log
 from .config import ConfigError   # raise from a check for unusable params -> "configuration error"
 from .media import MediaInfo, ProbeError, probe
 from .model import Candidate, Finding, Severity
@@ -60,6 +64,7 @@ from .timecode import TimecodeError, frames_to_tc, parse_fps, tc_is_drop, tc_to_
 
 # profile check-entry keys that are not check params (max_findings: report cap, read by cli)
 RESERVED_KEYS = ("enabled", "severity", "quality", "max_findings")
+LOG = log.get("engine")
 
 
 # --- registry ---------------------------------------------------------------------
@@ -73,6 +78,9 @@ class Tap:
     stream: int          # absolute ffprobe stream index
     chain: str           # ffmpeg filter chain, e.g. "crop=iw:1:0:0:exact=1,signalstats"
     keys: tuple[str, ...] = ()   # print only these metadata keys; () = all keys
+    # extra input streams (absolute indices); the chain refers to them as [in1], [in2], ...
+    # (e.g. audio.loudness merging mono streams with amerge); `stream` stays the main input
+    inputs: tuple[int, ...] = ()
 
 
 @dataclass
@@ -140,6 +148,7 @@ def load_checks() -> None:
             importlib.import_module(name)
         except Exception as e:  # a broken plugin must not take the tool down
             IMPORT_ERRORS[name] = f"{type(e).__name__}: {e}"
+            LOG.error("plugin %s failed to import", name, exc_info=True)
 
 
 # --- timeline -----------------------------------------------------------------------
@@ -155,6 +164,12 @@ class Timeline:
     program_start: int | None        # file frame index of first program frame
     program_end: int | None          # inclusive
     problems: list[str] = field(default_factory=list)
+    # head/tail layout segments in file frames: [{"type", "start", "end"}] (inclusive; D7)
+    segments: list[dict] = field(default_factory=list)
+
+    def segment(self, kind: str) -> dict | None:
+        """First head/tail segment of this type (e.g. 'slate'), or None."""
+        return next((s for s in self.segments if s["type"] == kind), None)
 
     def tc(self, frame: int) -> str:
         return frames_to_tc(self.start_frame + frame, self.fps, self.drop)
@@ -164,7 +179,8 @@ class Timeline:
                 "file_frames": self.file_frames, "start_timecode": self.tc(0),
                 "timecode_source": self.tc_source, "head_frames": self.head_frames,
                 "tail_frames": self.tail_frames, "program_start": self.program_start,
-                "program_end": self.program_end, "problems": self.problems}
+                "program_end": self.program_end, "problems": self.problems,
+                "segments": self.segments}
 
 
 def build_timeline(media: MediaInfo, spec: dict) -> Timeline:
@@ -208,7 +224,19 @@ def build_timeline(media: MediaInfo, spec: dict) -> Timeline:
             problems.append(f"head ({head}) + tail ({tail}) frames fall outside the file ({file_frames} frames)")
         else:
             p_start, p_end = head, file_frames - tail - 1
-    return Timeline(fps, drop, file_frames, start, source, head, tail, p_start, p_end, problems)
+    segs, pos = [], 0
+    for s in timing.get("head_layout") or []:
+        if s["type"] == "program":
+            break
+        segs.append({"type": s["type"], "start": pos, "end": pos + s["frames"] - 1})
+        pos += s["frames"]
+    if file_frames is not None and p_start is not None:
+        pos = file_frames - tail
+        for s in timing.get("tail_layout") or []:
+            segs.append({"type": s["type"], "start": pos, "end": pos + s["frames"] - 1})
+            pos += s["frames"]
+    return Timeline(fps, drop, file_frames, start, source, head, tail, p_start, p_end, problems,
+                    segs)
 
 
 # --- context ------------------------------------------------------------------------
@@ -236,7 +264,8 @@ _COUNTER = "metadata=mode=add:key=cmr.frame:value=1"
 
 
 def available_filters(ffmpeg_bin: str = "ffmpeg") -> set[str]:
-    p = subprocess.run([ffmpeg_bin, "-hide_banner", "-filters"], capture_output=True, text=True)
+    p = log.run(LOG, [ffmpeg_bin, "-hide_banner", "-filters"], "ffmpeg -filters", logging.DEBUG,
+                capture_output=True, text=True)
     return {m.group(1) for line in p.stdout.splitlines() if (m := _FILTER_LINE.match(line))}
 
 
@@ -258,30 +287,35 @@ def parse_metadata_file(text: str) -> list[tuple[str | None, str, dict]]:
 def build_graph(taps: list[tuple[str, Tap, str]], kinds: dict[int, str], tmp: Path):
     """taps: (key, Tap, kind). Returns (graph string, output labels, {key: [metadata files]}).
     A tap with `keys` gets one `metadata=mode=print:key=K` per key (own file each)."""
-    by_stream: dict[int, list[tuple[str, Tap]]] = {}
-    for key, tap, _ in taps:
-        by_stream.setdefault(tap.stream, []).append((key, tap))
+    by_stream: dict[int, list[tuple[str, Tap, int]]] = {}
+    for key, tap, _ in taps:      # consumers per stream: (key, tap, slot); slot k>0 = tap.inputs[k-1]
+        for slot, idx in enumerate((tap.stream, *tap.inputs)):
+            by_stream.setdefault(idx, []).append((key, tap, slot))
     parts, labels, files = [], [], {}
-    n = 0
+    src: dict[tuple[str, int], str] = {}
     for idx, items in by_stream.items():
-        audio = kinds[idx] == "audio"
-        meta = "ametadata" if audio else "metadata"
         if len(items) == 1:
             ins = [f"[0:{idx}]"]
         else:
             ins = [f"[s{idx}_{i}]" for i in range(len(items))]
-            parts.append(f"[0:{idx}]{'asplit' if audio else 'split'}={len(items)}{''.join(ins)}")
-        for (key, tap), src in zip(items, ins):
-            fs = [tmp / f"tap{n}_{i}.txt" for i in range(max(1, len(tap.keys)))]
-            for f in fs:
-                if not _SAFE_PATH.match(str(f)):
-                    raise RuntimeError(f"temp path {f} has characters unsafe for a filtergraph")
-            files[key] = fs
-            prints = ([f"{meta}=mode=print:key={k}:file={f}" for k, f in zip(tap.keys, fs)]
-                      if tap.keys else [f"{meta}=mode=print:file={fs[0]}"])
-            parts.append(f"{src}{tap.chain},{','.join(prints)}[o{n}]")
-            labels.append(f"[o{n}]")
-            n += 1
+            parts.append(f"[0:{idx}]{'asplit' if kinds[idx] == 'audio' else 'split'}={len(items)}"
+                         f"{''.join(ins)}")
+        for (key, _, slot), lab in zip(items, ins):
+            src[(key, slot)] = lab
+    for n, (key, tap, _) in enumerate(taps):
+        meta = "ametadata" if kinds[tap.stream] == "audio" else "metadata"
+        fs = [tmp / f"tap{n}_{i}.txt" for i in range(max(1, len(tap.keys)))]
+        for f in fs:
+            if not _SAFE_PATH.match(str(f)):
+                raise RuntimeError(f"temp path {f} has characters unsafe for a filtergraph")
+        files[key] = fs
+        prints = ([f"{meta}=mode=print:key={k}:file={f}" for k, f in zip(tap.keys, fs)]
+                  if tap.keys else [f"{meta}=mode=print:file={fs[0]}"])
+        chain = tap.chain
+        for k in range(1, len(tap.inputs) + 1):
+            chain = chain.replace(f"[in{k}]", src[(key, k)])
+        parts.append(f"{src[(key, 0)]}{chain},{','.join(prints)}[o{n}]")
+        labels.append(f"[o{n}]")
     return ";".join(parts), labels, files
 
 
@@ -308,8 +342,9 @@ def run_pass(media: MediaInfo, taps: list[tuple[str, Tap, str]], ffmpeg_bin: str
              filter_threads: int | None = None):
     kinds = {s["index"]: "video" for s in media.video} | {s["index"]: "audio" for s in media.audio}
     for _, tap, _ in taps:
-        if tap.stream not in kinds:
-            raise RuntimeError(f"tap {tap.name}: stream {tap.stream} is not a video/audio stream")
+        for idx in (tap.stream, *tap.inputs):
+            if idx not in kinds:
+                raise RuntimeError(f"tap {tap.name}: stream {idx} is not a video/audio stream")
     graph, labels, files = build_graph(taps, kinds, tmp)
     cmd = [ffmpeg_bin, "-hide_banner", "-nostdin", "-nostats", "-v", "error",
            "-filter_complex_threads", str(filter_threads or default_filter_threads()),
@@ -317,11 +352,26 @@ def run_pass(media: MediaInfo, taps: list[tuple[str, Tap, str]], ffmpeg_bin: str
     for lab in labels:
         cmd += ["-map", lab]
     cmd += ["-f", "null", "-"]
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    streams = Counter(tap.stream for _, tap, _ in taps)
+    LOG.info("main pass: %d tap(s) on stream(s) %s, %d print file(s), filter threads %s, "
+             "graph %d chars, input %s", len(taps), dict(streams), sum(map(len, files.values())),
+             cmd[cmd.index("-filter_complex_threads") + 1], len(graph), log.redact("path", media.path))
+    if LOG.isEnabledFor(logging.DEBUG):
+        for key, tap, _ in taps:
+            LOG.debug("tap %s: stream %d keys %s chain %s", key, tap.stream, list(tap.keys) or "all",
+                      tap.chain)
+    p = log.run(LOG, cmd, "ffmpeg main pass", capture_output=True, text=True)
+    t0 = time.monotonic()
     records = {}
     for key, fs in files.items():
         records[key] = _merge_prints([parse_metadata_file(f.read_text()) if f.exists() else []
                                       for f in fs])
+        if not all(f.exists() for f in fs):
+            LOG.warning("tap %s: metadata print file missing (no frames carried metadata?)", key)
+    LOG.info("main pass parsed: %d records from %d tap(s) in %.3f s", sum(map(len, records.values())),
+             len(records), time.monotonic() - t0)
+    if LOG.isEnabledFor(logging.DEBUG):
+        LOG.debug("records per tap: %s", {k: len(v) for k, v in records.items()})
     return PassInfo(True, p.returncode, [l for l in p.stderr.splitlines() if l.strip()],
                     command=cmd), records
 
@@ -351,6 +401,8 @@ def _to_records(raw: list[tuple], fps: Fraction, audio: bool,
     pts is printed); explicit rounding t * fps -> integer frame."""
     tb = pick_time_base(raw, list(time_bases))
     if tb is None and any(p is not None for p, _, _ in raw):
+        LOG.warning("no time base of %s fits the printed pts/pts_time (%d records; first %s)",
+                    [str(x) for x in time_bases], len(raw), raw[0][:2])
         raise RuntimeError("cannot determine the filter time base from the metadata print")
     out = []
     for pts, t, vals in raw:
@@ -380,22 +432,76 @@ def _check_order(profile: dict) -> list[tuple[str, dict]]:
                    if (cfg or {}).get("enabled", True)), key=lambda x: x[0])
 
 
+def unknown_params(check: Check, params: dict) -> list[str]:
+    """Param names a check's params_schema does not allow (schema with additionalProperties
+    false); [] when the check has no such schema."""
+    s = check.params_schema or {}
+    if s.get("additionalProperties", True) is not False:
+        return []
+    return sorted(k for k in params if k not in (s.get("properties") or {}))
+
+
+def validate_profile_params(profile: dict, substituted: bool) -> list[str]:
+    """Config-time check of every profile check entry against its params_schema.
+    Unknown param names (typos) are reported for every check, enabled or not; values are
+    validated only when `substituted` and the check is enabled (disabled checks keep their
+    `${spec.*}` refs unresolved, D4). Unknown check ids are left to run_file (ERROR finding:
+    a plugin that failed to import must not stop the other checks, D11).
+    Returns error lines; [] = valid."""
+    load_checks()
+    errs = []
+    for cid, cfg in (profile.get("checks") or {}).items():
+        check, cfg = REGISTRY.get(cid), cfg or {}
+        if check is None or not check.params_schema:
+            continue
+        params = {k: v for k, v in cfg.items() if k not in RESERVED_KEYS}
+        bad = unknown_params(check, params)
+        if bad:
+            allowed = ", ".join(sorted(check.params_schema.get("properties") or {})) or "none"
+            errs.append(f"checks.{cid}: unknown parameter(s) {', '.join(map(repr, bad))} "
+                        f"(allowed: {allowed})")
+            continue
+        if substituted and cfg.get("enabled", True):
+            for e in jsonschema.Draft202012Validator(check.params_schema).iter_errors(params):
+                where = "/".join(map(str, e.path))
+                errs.append(f"checks.{cid}{'.' + where if where else ''}: {e.message}")
+    return errs
+
+
 def run_file(path: Path, spec: dict, profile: dict, ffmpeg_bin="ffmpeg", ffprobe_bin="ffprobe",
              filters: set[str] | None = None, filter_threads: int | None = None) -> dict:
     load_checks()
     path = Path(path)
+    t_file = time.monotonic()
+    log.set_file(path)
+    LOG.info("file start: %s (%s)", log.redact("path", path), log.memory())
     result = {"path": str(path), "identity": None, "timeline": None, "findings": []}
     findings: list[Finding] = result["findings"]
     try:
-        result["identity"] = file_identity(path)
-        media = probe(path, ffprobe_bin)
+        with log.phase(LOG, "probe"):
+            result["identity"] = file_identity(path)
+            media = probe(path, ffprobe_bin)
         if not media.video:
             raise ProbeError("no video stream")
         timeline = build_timeline(media, spec)
     except (OSError, ProbeError) as e:
+        LOG.error("probe failed: %s", e)
         findings.append(Finding("probe", Severity.ERROR, str(e)))
         result["worst"] = "ERROR"
+        log.set_file(None)
         return result
+    v0 = media.video[0]
+    LOG.info("media: %s %d bytes, container %s, video %s %s %sx%s %s fps %s, %d audio stream(s) %s, "
+             "%d subtitle(s), timecode %s", path.suffix or "(no ext)", result["identity"]["size"],
+             media.container, v0["codec"], v0["codec_profile"], v0["width"], v0["height"],
+             v0["pixel_format"], v0["fps"], len(media.audio),
+             [(a["codec"], a["channels"], a["sample_rate"]) for a in media.audio],
+             len(media.subtitles), media.timecode)
+    LOG.info("timeline: %d frames, start TC %s (%s), head %d tail %d, program %s-%s, %d segment(s)",
+             timeline.file_frames or -1, timeline.tc(0), timeline.tc_source, timeline.head_frames,
+             timeline.tail_frames, timeline.program_start, timeline.program_end, len(timeline.segments))
+    for prob in timeline.problems:
+        LOG.warning("timeline problem: %s", prob)
     result["timeline"] = timeline.to_dict()
     if filters is None:
         filters = available_filters(ffmpeg_bin)
@@ -405,6 +511,7 @@ def run_file(path: Path, spec: dict, profile: dict, ffmpeg_bin="ffmpeg", ffprobe
         check = REGISTRY.get(cid)
         if check is None:
             hint = f" (plugin import errors: {IMPORT_ERRORS})" if IMPORT_ERRORS else ""
+            LOG.error("unknown check id %s%s", cid, hint)
             findings.append(Finding(cid, Severity.ERROR, f"unknown check id{hint}"))
             continue
         params = {k: v for k, v in cfg.items() if k not in RESERVED_KEYS}
@@ -417,37 +524,48 @@ def run_file(path: Path, spec: dict, profile: dict, ffmpeg_bin="ffmpeg", ffprobe
             if check.params_schema:
                 jsonschema.validate(params, check.params_schema)
         except (ValueError, jsonschema.ValidationError) as e:
+            LOG.error("%s: bad profile params: %s", cid, log.redact_quoted(getattr(e, "message", e)))
             findings.append(Finding(cid, Severity.ERROR, f"bad profile params: {getattr(e, 'message', e)}"))
             continue
         missing = [f for f in check.requires_filters if f not in filters]
         if missing:
+            LOG.error("%s: ffmpeg lacks filter(s) %s", cid, missing)
             findings.append(Finding(cid, Severity.ERROR, f"ffmpeg lacks filter(s): {', '.join(missing)}"))
             continue
         contexts.append((check, CheckContext(cid, media, spec, params, sev, timeline,
                                              quality=quality)))
 
     # collect taps, run the single pass if anything needs it
-    all_taps, tap_owner, tap_errors = [], {}, {}
+    all_taps, tap_owner, tap_errors, tap_skips = [], {}, {}, {}
     for check, ctx in contexts:
         try:
             for tap in check.taps(ctx):
                 key = f"{ctx.check_id}/{tap.name}"
                 all_taps.append((key, tap, ctx.check_id))
                 tap_owner[key] = (ctx.check_id, tap)
-        except Skip:
-            pass   # reported again by evaluate()
+        except Skip as e:   # SKIPPED without detect/evaluate (they would see no records)
+            tap_skips[ctx.check_id] = str(e) or "skipped"
+        except ConfigError as e:   # same wording as from detect/evaluate
+            log.get("check." + ctx.check_id).error("configuration error: %s", log.redact_quoted(str(e)))
+            tap_errors[ctx.check_id] = f"configuration error: {e}"
         except Exception as e:
+            log.get("check." + ctx.check_id).error("taps() failed", exc_info=True)
             tap_errors[ctx.check_id] = f"taps() failed: {type(e).__name__}: {e}"
+    LOG.info("checks: %d enabled and runnable %s, %d tap(s)", len(contexts),
+             [c.check_id for _, c in contexts], len(all_taps))
     passinfo, raw_records = PassInfo(False), {}
     if all_taps or any("decode" in c.needs for c, _ in contexts):
         counter = ("__engine__/frames", Tap("frames", media.video[0]["index"], _COUNTER), "__engine__")
-        with tempfile.TemporaryDirectory(prefix="cmr_") as tmp:
+        with tempfile.TemporaryDirectory(prefix="cmr_") as tmp, log.phase(LOG, "main pass"):
             try:
                 passinfo, raw_records = run_pass(media, all_taps + [counter], ffmpeg_bin, Path(tmp),
                                                  filter_threads)
             except (OSError, RuntimeError) as e:
+                LOG.error("single pass failed to start: %s", e, exc_info=True)
                 passinfo = PassInfo(False, None, [f"single pass failed to start: {e}"])
         passinfo.decoded_frames = len(raw_records.get("__engine__/frames", [])) if passinfo.ran else None
+        LOG.info("main pass: decoded %s of %s frames; %s", passinfo.decoded_frames,
+                 timeline.file_frames, log.memory())
 
     audio_idx = {s["index"] for s in media.audio}
     # time base candidates per stream: container stream time_base, then 1/sample_rate
@@ -459,10 +577,16 @@ def run_file(path: Path, spec: dict, profile: dict, ffmpeg_bin="ffmpeg", ffprobe
         tbs[s["index"]] = c
     for check, ctx in contexts:
         ctx.passinfo = passinfo
+        clog = log.get("check." + ctx.check_id)
         if ctx.check_id in tap_errors:
             findings.append(ctx.finding(tap_errors[ctx.check_id], Severity.ERROR))
             continue
+        t0 = t1 = t2 = time.monotonic()
+        cands = []
+        clog.debug("start (quality %s, severity %s)", ctx.quality, ctx.severity.name)
         try:
+            if ctx.check_id in tap_skips:
+                raise Skip(tap_skips[ctx.check_id])
             records = {}
             for key, (cid, tap) in tap_owner.items():
                 if cid == ctx.check_id:
@@ -470,7 +594,9 @@ def run_file(path: Path, spec: dict, profile: dict, ffmpeg_bin="ffmpeg", ffprobe
                                                     tap.stream in audio_idx, tbs.get(tap.stream, []))
             if records and not passinfo.ran:
                 raise RuntimeError("; ".join(passinfo.stderr) or "single pass did not run")
+            t1 = time.monotonic()
             cands = check.detect(ctx, records)
+            t2 = time.monotonic()
             out = check.evaluate(ctx, cands)
             verify = VERIFIERS.get(ctx.check_id)
             for f in out:
@@ -480,15 +606,29 @@ def run_file(path: Path, spec: dict, profile: dict, ffmpeg_bin="ffmpeg", ffprobe
             if not out:
                 out = [ctx.finding("ok", Severity.PASS)]
         except Skip as e:
+            clog.info("skipped: %s", log.redact_quoted(str(e)))
             out = [ctx.finding(str(e) or "skipped", Severity.SKIPPED)]
         except ConfigError as e:
+            clog.error("configuration error: %s", log.redact_quoted(str(e)))
             out = [ctx.finding(f"configuration error: {e}", Severity.ERROR)]
         except Exception as e:
+            clog.error("check crashed", exc_info=True)
             tb = traceback.format_exception_only(type(e), e)[-1].strip()
             out = [ctx.finding(f"check crashed: {tb}", Severity.ERROR)]
         for f in out:
             f.quality = ctx.quality
         findings.extend(out)
+        t3 = time.monotonic()
+        clog.info("done in %.3f s (records %.3f, detect %.3f, evaluate %.3f): %d candidate(s), "
+                  "findings %s", t3 - t0, t1 - t0, t2 - t1, t3 - t2, len(cands or []),
+                  dict(Counter(f.severity.name for f in out)))
+        if clog.isEnabledFor(logging.DEBUG):
+            for f in out:
+                if f.severity > Severity.SKIPPED:
+                    clog.debug("finding %s frames %s-%s stream %s kind %s: %s", f.severity.name,
+                               f.frame_start, f.frame_end, f.stream,
+                               (f.evidence or [{}])[0].get("kind") if f.evidence else None,
+                               log.redact_quoted(f.message))
 
     for f in findings:
         if f.frame_start is not None:
@@ -498,11 +638,16 @@ def run_file(path: Path, spec: dict, profile: dict, ffmpeg_bin="ffmpeg", ffprobe
     findings.sort(key=lambda f: (f.check_id, -1 if f.frame_start is None else f.frame_start,
                                  f.stream if f.stream is not None else -1))
     result["worst"] = max((f.severity for f in findings), default=Severity.PASS).name
+    LOG.info("file done in %.3f s: worst %s, %d finding(s) %s; %s", time.monotonic() - t_file,
+             result["worst"], len(findings), dict(Counter(f.severity.name for f in findings)),
+             log.memory())
+    log.set_file(None)
     return result
 
 
 def ffmpeg_version(ffmpeg_bin: str = "ffmpeg") -> str:
     if not shutil.which(ffmpeg_bin):
         return "not found"
-    p = subprocess.run([ffmpeg_bin, "-version"], capture_output=True, text=True)
+    p = log.run(LOG, [ffmpeg_bin, "-version"], "ffmpeg -version", logging.DEBUG,
+                capture_output=True, text=True)
     return p.stdout.splitlines()[0] if p.stdout else "unknown"

@@ -1,0 +1,21 @@
+# Slate template: "Label: value" slate as on real Extreme Reach deliveries (fictional example).
+# White text on flat black, labels left-aligned WITH a colon, one field per line; the value
+# follows the colon on the same line (tight `Ad-ID: X` or a tab-stop value column). No bars,
+# grey steps, logo or countdown (slate.bars is SKIPPED: no `bars` section).
+# Covers both label sets seen in practice via aliases:
+#   set 1: Ad-ID / Title / Length "15s" / Audio / Agency / Advertiser / Date MM/DD/YYYY
+#   set 2: AdID / Brand / Title / Length "30" / Audio / Agency / Date M/D/YYYY
+# AD-ID on the slate is the BASE code (SBX017); the filename is base + length + H
+# (SBX01715H.mov), see job_label_colon.yaml. Field rules: src/cmr/checks/slate/CLAUDE.md.
+template_version: 1
+name: xr_label_colon
+layout: label_colon
+date_formats: [MM/DD/YYYY, M/D/YYYY]
+fields:
+  AD-ID:      {aliases: [Ad-ID, AdID, AD ID], type: id, expect: "{file.ad_base}"}
+  TITLE:      {expect: "{row.title}"}
+  LENGTH:     {aliases: [Length, Duration], type: duration, expect: "{file.length}"}   # + slate.claims vs the media
+  AUDIO:      {type: audio}                     # verified against the media by slate.claims
+  AGENCY:     {expect: "{job.agency}"}
+  ADVERTISER: {aliases: [Advertiser, Brand, Client], expect: "{job.advertiser}"}
+  DATE:       {type: date}                      # judged by the profile date policy, formats above

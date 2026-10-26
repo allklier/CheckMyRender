@@ -1,0 +1,22 @@
+# Long-form broadcast file masters (multi-channel PCM, embedded captions, drop-frame timecode,
+# head with slate/black from a pre-roll timecode). Extends release. Numbers that belong to a
+# broadcaster (head length, start timecode, channel map) live in the SPEC, not here.
+profile_version: 1
+name: broadcast_master
+extends: release
+description: Long-form broadcast masters - release rules; intentionally silent channels and long-form findings caps.
+checks:
+  audio.silent_channel:
+    # Broadcaster channel maps can REQUIRE silent channels (e.g. stereo program on 1-2,
+    # 3-6 silent). Declare those in the spec (audio.allowed_silence); this profile still keeps
+    # any other silent channel at info (predates allowed_silence; review whether to restore fail).
+    severity: info
+  video.black_runs:
+    max_findings: 25             # long form: act breaks and fades give more legitimate runs
+  video.blanking:
+    max_findings: 25
+  decode.errors:
+    max_lines: 50
+  video.color:
+    severity: warn               # primaries/transfer/matrix mismatch warns
+    key_severity: {range: warn}  # range mismatch (e.g. full-range encode): warn

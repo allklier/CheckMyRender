@@ -1,6 +1,10 @@
+[build-system]
+requires = ["setuptools>=61"]    # PEP 621 metadata in pyproject (setuptools >= 61)
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "check_my_render"
-version = "0.0.1"
+dynamic = ["version"]            # single source: cmr.__version__ (src/cmr/__init__.py)
 description = "Render QC: metadata and content checks against delivery specs"
 requires-python = ">=3.12"
 dependencies = ["PyYAML", "jsonschema"]
@@ -8,8 +12,20 @@ dependencies = ["PyYAML", "jsonschema"]
 [project.scripts]
 cmr = "cmr.cli:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools]
+# The stock profiles live in the repo's top-level profiles/ (source-tree runs use them there);
+# an install ships them as package data of `cmr.profiles` (config.stock_profiles_dir()).
+# Explicit package list (find cannot add the profiles mapping); tests/unit/test_packaging.py
+# fails when a new package under src/cmr is missing here.
+package-dir = {"" = "src", "cmr.profiles" = "profiles"}
+packages = ["cmr", "cmr.checks", "cmr.checks.blanking", "cmr.checks.slate", "cmr.report",
+            "cmr.profiles"]
+
+[tool.setuptools.package-data]
+"cmr.profiles" = ["*.yaml"]
+
+[tool.setuptools.dynamic]
+version = {attr = "cmr.__version__"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

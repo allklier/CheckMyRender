@@ -18,13 +18,16 @@ Category waivers (`type: category`, waiver file version 2): a blanket decision f
 class, NO fingerprint: check id [+ evidence kind] [+ edge | channel] [+ frame range], waives
 findings whose RAW severity is <= the required `max_severity` ceiling (info|warn|fail).
 Applied after the per-finding waivers, only to findings those did not waive.
+Job scope (D31): an entry with `job: <id>` applies only to runs of that job (job.yaml
+`job.id`); `job: "*"` applies to every job; an entry without `job` applies everywhere (files
+written before D31). Entries of another job are skipped and listed as `foreign`.
 Contract and verified facts: src/cmr/CLAUDE.md.
 """
 from __future__ import annotations
 
 import datetime
+import logging
 import math
-import subprocess
 from array import array
 from fractions import Fraction
 from pathlib import Path
@@ -32,6 +35,7 @@ from typing import Callable
 
 import yaml
 
+from . import log
 from .config import ConfigError
 from .media import probe
 from .model import Finding, Severity
@@ -43,9 +47,13 @@ EDGES = ("top", "bottom", "left", "right")
 DEFAULTS = {"video_max_bits": 10, "audio_max_db": 2.0, "margin_frames": 5}
 VIDEO_SAMPLES, AUDIO_SAMPLES = 8, 16
 FLOOR_DB = -90.0
+ANY_JOB = "*"                # `job: "*"`: a deliberate cross-job waiver (D31)
 LOCATOR_KEYS = ("edge", "kind", "channel")     # evidence keys that are part of the location
 ALGO = {"video": ("video_dhash", "dhash64-gray9x8-area", 1),
-        "audio": ("audio_envelope", "peak-rms-dbfs-0.1db", 1)}
+        "audio": ("audio_envelope", "peak-rms-dbfs-0.1db", 1),
+        "slate": ("slate_text", "field-exact-text", 1)}
+TEXT_TYPE = ALGO["slate"][0]
+LOG = log.get("waivers")
 
 
 class FingerprintError(RuntimeError):
@@ -53,8 +61,11 @@ class FingerprintError(RuntimeError):
 
 
 def media_kind(check_id: str) -> str | None:
-    return "video" if check_id.startswith("video.") else (
-        "audio" if check_id.startswith("audio.") else None)
+    """video / audio (perceptual fingerprints) or slate (exact OCR text, D27), else None."""
+    for kind in ("video", "audio", "slate"):
+        if check_id.startswith(kind + "."):
+            return kind
+    return None
 
 
 def waivable(fd: dict) -> bool:
@@ -89,8 +100,8 @@ def _db(x: float) -> float:
 
 
 def _ffmpeg(ffmpeg: str, args: list[str]) -> bytes:
-    p = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-v", "error", *args],
-                       capture_output=True, timeout=120)
+    p = log.run(LOG, [ffmpeg, "-hide_banner", "-nostdin", "-v", "error", *args],
+                "ffmpeg fingerprint seek", logging.DEBUG, capture_output=True, timeout=120)
     if p.returncode != 0:
         raise FingerprintError(p.stderr.decode(errors="replace").strip() or "ffmpeg failed")
     return p.stdout
@@ -150,10 +161,22 @@ class Fingerprinter:
         return self.fingerprint(check_id, stream, sample_frames(a, b, n))
 
 
+def text_fingerprint(evidence: list | None) -> dict:
+    """Slate findings (D27): the field name (evidence `kind`) + the exact OCR'd text (evidence
+    `text`). Not tied to frames: a waiver stays valid while the slate reads the same, and a
+    changed text (e.g. another AD-ID) is 'content changed'. No media access needed."""
+    ev = (evidence or [{}])[0] if evidence else {}
+    typ, algo, ver = ALGO["slate"]
+    return {"type": typ, "algorithm": algo, "version": ver, "frames": [],
+            "values": [ev.get("kind"), ev.get("text")]}
+
+
 def distance(a: dict, b: dict) -> float | None:
     """None = not comparable (other type/algorithm/version or frames)."""
     if any(a.get(k) != b.get(k) for k in ("type", "algorithm", "version", "frames")):
         return None
+    if a["type"] == TEXT_TYPE:
+        return 0 if a["values"] == b["values"] else 1
     if a["type"] == "video_dhash":
         return max((bin(int(x, 16) ^ int(y, 16)).count("1") for x, y in zip(a["values"], b["values"])),
                    default=0)
@@ -189,7 +212,7 @@ def _check_category(w: dict) -> str | None:
     if str(w["max_severity"]).lower() not in CEILINGS:
         return f"max_severity {w['max_severity']!r} (allowed: {', '.join(CEILINGS)})"
     if media_kind(str(w["check_id"])) is None:
-        return f"check_id {w['check_id']!r}: only video.*/audio.* checks can be waived"
+        return f"check_id {w['check_id']!r}: only video.*/audio.*/slate.* checks can be waived"
     if "edge" in w and "channel" in w:
         return "edge and channel are exclusive"
     if "edge" in w and w["edge"] not in EDGES:
@@ -221,6 +244,8 @@ def load(path) -> list[dict]:
         if miss:
             raise ConfigError(f"waiver file {path}: entry {i + 1} lacks {', '.join(miss)}")
         bad = _check_category(w) if is_category(w) else None
+        if "job" in w and (not isinstance(w["job"], str) or not w["job"]):
+            bad = f"job {w['job']!r} must be a job id or \"*\""
         if bad:
             raise ConfigError(f"waiver file {path}: entry {i + 1}: {bad}")
         parse_date(w.get("expires"))
@@ -242,8 +267,8 @@ def next_id(waivers: list[dict]) -> str:
 
 
 def make_waiver(wid: str, fd: dict, fp: dict, reason: str, today: datetime.date,
-                expires: datetime.date | None = None) -> dict:
-    w = {"id": wid, "check_id": fd["check_id"], "stream": fd["stream"],
+                expires: datetime.date | None = None, job: str | None = None) -> dict:
+    w = {"id": wid, **({"job": job} if job else {}), "check_id": fd["check_id"], "stream": fd["stream"],
          **locator(fd.get("evidence") or (fd.get("candidate") or {}).get("evidence")),
          "frame_start": fd["frame_start"], "frame_end": fd["frame_end"],
          "timecode_start": fd.get("timecode_start"), "timecode_end": fd.get("timecode_end"),
@@ -257,9 +282,9 @@ def make_waiver(wid: str, fd: dict, fp: dict, reason: str, today: datetime.date,
 def make_category(wid: str, check_id: str, max_severity: str, reason: str, today: datetime.date,
                   kind: str | None = None, edge: str | None = None, channel: int | None = None,
                   frames: tuple[int, int] | None = None,
-                  expires: datetime.date | None = None) -> dict:
+                  expires: datetime.date | None = None, job: str | None = None) -> dict:
     """Category waiver (no fingerprint: a blanket decision). Raises ValueError if invalid."""
-    w = {"id": wid, "type": "category", "check_id": check_id}
+    w = {"id": wid, **({"job": job} if job else {}), "type": "category", "check_id": check_id}
     for k, v in (("kind", kind), ("edge", edge), ("channel", channel)):
         if v is not None:
             w[k] = v
@@ -275,12 +300,23 @@ def make_category(wid: str, check_id: str, max_severity: str, reason: str, today
 
 
 # --- matching -------------------------------------------------------------------------
+def split_job(waivers: list[dict], job_id: str | None) -> tuple[list[dict], list[dict]]:
+    """(entries this run applies, foreign entries) for a run of job `job_id` (None = the run
+    has no job id): an entry applies when it has no `job` (written before D31), `job: "*"`,
+    or the run's job id; any other `job` is foreign (skipped, listed in the report)."""
+    mine, foreign = [], []
+    for w in waivers:
+        (mine if "job" not in w or w["job"] in (ANY_JOB, job_id) else foreign).append(w)
+    return mine, foreign
+
+
 def settings(profile: dict) -> dict:
     return {**DEFAULTS, **(profile.get("waivers") or {})}
 
 
 def _tolerance(w: dict, s: dict) -> float:
-    return s["video_max_bits"] if media_kind(w["check_id"]) == "video" else s["audio_max_db"]
+    kind = media_kind(w["check_id"])
+    return s["video_max_bits"] if kind == "video" else 0 if kind == "slate" else s["audio_max_db"]
 
 
 def location_match(f: Finding, w: dict, margin: int) -> bool:
@@ -339,10 +375,15 @@ def apply(findings: list[Finding], waivers: list[dict], current: Callable[[dict]
         hits = [w for w in active if location_match(f, w, s["margin_frames"])]
         changed = []
         for w in hits:
-            if w["id"] not in cache:
+            if (w.get("fingerprint") or {}).get("type") == TEXT_TYPE:
+                # slate: compare with THIS finding's text (not cached per waiver)
+                cache[w["id"]] = distance(w["fingerprint"], text_fingerprint(
+                    f.evidence or (f.candidate.evidence if f.candidate else [])))
+            elif w["id"] not in cache:
                 try:
                     cache[w["id"]] = distance(w["fingerprint"], current(w))
-                except FingerprintError:
+                except FingerprintError as e:
+                    LOG.warning("%s: fingerprint failed: %s", w["id"], e)
                     cache[w["id"]] = None
             d, tol = cache[w["id"]], _tolerance(w, s)
             if d is not None and d <= tol:
@@ -352,7 +393,11 @@ def apply(findings: list[Finding], waivers: list[dict], current: Callable[[dict]
                             "distance": d, "tolerance": tol}
                 f.lower_to(Severity.PASS)
                 _count(state, w["id"])
+                LOG.debug("%s waived %s frames %s-%s (distance %s <= %s)", w["id"], f.check_id,
+                          f.frame_start, f.frame_end, d, tol)
                 break
+            LOG.info("%s content changed for %s frames %s-%s (distance %s, tolerance %s)", w["id"],
+                     f.check_id, f.frame_start, f.frame_end, d, tol)
             state.setdefault(w["id"], set()).add("changed")
             changed.append((w, d, tol))
         else:
@@ -372,17 +417,24 @@ def apply(findings: list[Finding], waivers: list[dict], current: Callable[[dict]
                 f.waiver = {"id": w["id"], "status": "waived", "type": "category",
                             "reason": w["reason"], "max_severity": w["max_severity"]}
                 f.lower_to(Severity.PASS)
+                LOG.debug("%s (category) waived %s %s frames %s-%s", w["id"], f.check_id,
+                          f.raw_severity.name, f.frame_start, f.frame_end)
                 break
 
 
-def summary(path, waivers: list[dict], state: dict, today: datetime.date) -> dict:
+def summary(path, waivers: list[dict], state: dict, today: datetime.date,
+            foreign: list[dict] = ()) -> dict:
     """Waivers by outcome. Every entry has `type` (finding|category) and `count` (findings
-    waived in this run); category entries also their scope (kind/edge/channel/max_severity)."""
-    out = {"file": str(path), "applied": [], "content_changed": [], "stale": [], "expired": []}
+    waived in this run); category entries also their scope (kind/edge/channel/max_severity).
+    `foreign` (1.4): entries of another job (split_job), not applied; entries carry `job`."""
+    out = {"file": str(path), "applied": [], "content_changed": [], "stale": [], "expired": [],
+           "foreign": []}
     counts = state.get("__counts__", {})
-    for w in waivers:
+    for w, is_foreign in [(w, False) for w in waivers] + [(w, True) for w in foreign]:
         st = state.get(w["id"], set())
-        if parse_date(w.get("expires")) and parse_date(w["expires"]) < today:
+        if is_foreign:
+            key = "foreign"
+        elif parse_date(w.get("expires")) and parse_date(w["expires"]) < today:
             key = "expired"
         elif "applied" in st:
             key = "applied"
@@ -393,6 +445,8 @@ def summary(path, waivers: list[dict], state: dict, today: datetime.date) -> dic
         e = {k: w.get(k) for k in ("id", "check_id", "stream", "frame_start",
                                    "frame_end", "timecode_start", "timecode_end", "reason")}
         e.update(type=w.get("type", "finding"), count=counts.get(w["id"], 0))
+        if "job" in w:
+            e["job"] = w["job"]
         if is_category(w):
             e.update({k: w[k] for k in ("kind", "edge", "channel") if k in w},
                      max_severity=w["max_severity"])

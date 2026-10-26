@@ -7,9 +7,11 @@ from collections import Counter
 
 import jsonschema
 
-from .. import __version__
-from ..model import SCHEMA_VERSION, Finding, Severity, exit_code
+from .. import __version__, log
+from ..model import SCHEMA_VERSION, Finding, Severity, exit_code, file_verdict
 from ..schemas import REPORT_SCHEMA
+
+LOG = log.get("report")
 
 
 def _span(fs: list[Finding]) -> dict:
@@ -65,30 +67,45 @@ def cap_findings(findings: list[Finding], limit_for) -> tuple[list[Finding], lis
 
 def build_report(files: list[dict], profile_name: str, profile_shas: list[str], spec_path: str,
                  spec_sha: str, ffmpeg_version: str, fail_on: str, waivers: dict | None = None,
-                 max_findings: int = 0, check_limits: dict | None = None) -> dict:
+                 max_findings: int = 0, check_limits: dict | None = None,
+                 job: dict | None = None, mode: str | None = None,
+                 quality: str = "profile", job_id: str | None = None) -> dict:
     """`max_findings` (0 = unlimited, the default for library callers) and `check_limits`
     {check_id: N} shape the listed findings (cap_findings); worst, exit code and counts
-    always come from ALL findings."""
-    worst = max((Severity[f["worst"]] for f in files), default=Severity.PASS)
+    always come from ALL findings. File and run verdicts: SKIPPED alone counts as PASS
+    (model.file_verdict). `mode`/`quality`: run mode (D26) and `cmr check --quality`
+    ("profile" = not given), recorded in the summary (1.3). `job_id`: job.yaml `job.id` (D31,
+    summary 1.4; None without one)."""
+    verdicts = [file_verdict([Severity[f["worst"]]]) for f in files]
+    worst = max(verdicts, default=Severity.PASS)
     # a WAIVED finding (severity lowered to PASS, raw_severity kept) has its own count
     counts = Counter("WAIVED" if fd.waiver_ref else fd.severity.name
                      for f in files for fd in f["findings"])
     limits = check_limits or {}
     out_files = []
-    for f in files:
+    for f, verdict in zip(files, verdicts):
+        if verdict.name != f["worst"]:
+            LOG.info("file verdict PASS: its only results besides PASS are SKIPPED")
         listed, sup, wcat = cap_findings(f["findings"], lambda c: limits.get(c, max_findings))
-        out_files.append({**f, "findings": [fd.to_dict() for fd in listed],
+        for s in sup:
+            LOG.info("cap: %s %d finding(s) suppressed (limit %d, worst %s, %s)", s["check_id"],
+                     s["count"], s["limit"], s["worst_severity"], s["by_severity"])
+        for w in wcat:
+            LOG.info("cap: %s %d finding(s) waived by category %s, summarised", w["check_id"],
+                     w["count"], w["waiver_id"])
+        out_files.append({**f, "worst": verdict.name, "findings": [fd.to_dict() for fd in listed],
                           "suppressed": sup, "waived_by_category": wcat})
     report = {
         "schema_version": SCHEMA_VERSION,
         "tool": {"name": "cmr", "version": __version__, "ffmpeg": ffmpeg_version,
                  "python": platform.python_version()},
         "profile": {"name": profile_name, "sha256": profile_shas},
-        "spec": {"path": spec_path, "sha256": spec_sha},
+        "spec": {"path": spec_path, "sha256": spec_sha, **({"job": job} if job else {})},
         "files": out_files,
         "summary": {"worst": worst.name, "fail_on": fail_on, "exit_code": exit_code(worst, fail_on),
                     "counts": {**{s.name: counts.get(s.name, 0) for s in Severity},
                                "WAIVED": counts.get("WAIVED", 0)},
+                    "mode": mode, "quality": quality, "job_id": job_id,
                     "max_findings": max_findings, "check_limits": limits,
                     "suppressed": sum(s["count"] for f in out_files for s in f["suppressed"]),
                     "waived_by_category": sum(w["count"] for f in out_files

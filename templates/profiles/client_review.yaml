@@ -1,0 +1,32 @@
+# =====================================================================================
+# PROFILE TEMPLATE - review renders (client / internal review)
+# =====================================================================================
+# Starts from the stock `review` profile (profiles/review.yaml), which already:
+#   - runs blanking and black runs in FAST mode (blanking looks at 1 in 5 frames,
+#     black runs at a quarter-resolution picture of every frame),
+#   - makes filename INFO, switches captions off, makes blanking and loudness WARN,
+#   - lists dark picture edges (dark_edge) as INFO,
+#   - allows black runs and silences up to 24 frames.
+# Below are the usual house adjustments. Delete what you do not need; everything you
+# do not mention stays as in `review`.
+#
+# Use:
+#   cmr check REVIEW.mov --profile profiles/client_review.yaml --spec SPEC.yaml
+# =====================================================================================
+profile_version: 1
+name: client_review
+extends: review
+description: House review renders - review rules plus house adjustments.
+checks:
+  timing.frame_count:
+    tolerance_frames: 0              # frames the program may differ from the spec (0 = exact).
+                                     # Raise it (e.g. 48) if review cuts are still moving.
+  video.black_runs:
+    max_black_run_frames: 24         # longest allowed run of black frames inside the program
+  audio.silence:
+    threshold_dbfs: -60              # a frame is "silent" when every channel peaks below this
+    max_run_frames: 48               # temp mixes often have short gaps: allow 2 s at 24p
+  audio.loudness:
+    severity: info                   # temp mix: show the measurement, never gate on it
+  video.blanking:
+    max_findings: 5                  # keep the review report short; all are still counted

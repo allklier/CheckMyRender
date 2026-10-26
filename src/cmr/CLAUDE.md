@@ -31,7 +31,9 @@ class Black(Check):
         return [ctx.finding("black run", frame_start=c.frame_start, frame_end=c.frame_end,
                             candidate=c) for c in candidates]
 ```
-- `Tap(name, stream, chain, keys=())`: `chain` is an ffmpeg filter chain with NO metadata
+- `Tap(name, stream, chain, keys=(), inputs=())`: `inputs` = extra absolute stream indices the
+  chain reads as `[in1]`, `[in2]`, ... (audio.loudness merges mono streams); `stream` is the
+  main input (prefixed), time base and metadata kind. `chain` is an ffmpeg filter chain with NO metadata
   print and NO output label; it may contain internal `;`-segments whose labels are prefixed
   uniquely (video.blanking uses `bk<edge>...` for split/lut2). The engine appends
   `,metadata=mode=print:file=<tmp>` (`ametadata` for audio streams), or with `keys` one
@@ -53,11 +55,19 @@ class Black(Check):
 - `ctx.timeline` (`Timeline`): `fps` (Fraction), `drop`, `file_frames`, `start_frame`
   (TC of frame 0 as frame count), `tc_source` (file|spec|none), `head_frames`, `tail_frames`,
   `program_start`, `program_end` (inclusive file frame indices; None if layout does not fit),
-  `tc(frame) -> "HH:MM:SS:FF"`.
+  `tc(frame) -> "HH:MM:SS:FF"`, `segments` (head/tail layout segments `{type, start, end}` in
+  file frames, inclusive; D27) and `segment(type)` (first segment of a type or None).
+  Layout vs file length (D7): the spec loader checks only the layout's SHAPE (one `program`
+  segment, last in head_layout; `frames` on every other segment; no program in tail_layout),
+  because the file length is unknown at load time. A layout that does not fit the file
+  (head + tail >= file frames) is found at run time: `Timeline.problems`, program range None,
+  a `timing.layout` FAIL, and SKIPPED for the checks that need the program range (audio
+  content incl. loudness, black runs, slate.claims).
 - `ctx.passinfo` (`PassInfo`): `ran`, `returncode`, `stderr` lines, `decoded_frames`
   (engine counter tap on the first video stream), `command`.
-- Raise `Skip("reason")` -> SKIPPED. Raise `engine.ConfigError("...")` for unusable
-  params/spec values -> ERROR "configuration error: ...". Any other exception -> ERROR
+- Raise `Skip("reason")` -> SKIPPED (from `taps()` too: the check is then SKIPPED without
+  running detect/evaluate). Raise `engine.ConfigError("...")` for unusable
+  params/spec values -> ERROR "configuration error: ..." (from taps() too). Any other exception -> ERROR
   finding ("check crashed").
 - `-filter_complex_threads`: `engine.default_filter_threads()` = min(8, cpu_count//2);
   override `run_file(filter_threads=N)` / `cmr check --filter-threads N`.
@@ -82,18 +92,102 @@ class Black(Check):
   "model_hash", "severity"}`; applied to findings that carry a `candidate`; the engine calls
   `Finding.lower_to()` so a verifier can only LOWER severity. Empty in v1.
 - Severities: PASS < SKIPPED < INFO < WARN < FAIL < ERROR. Exit: 0 pass, 1 warn
-  (0 with `--fail-on fail`), 2 fail, 3 ERROR / config error.
+  (0 with `--fail-on fail`), 2 fail, 3 ERROR / config error / command-line usage error
+  (`cli._Parser`; argparse's own 2 would read as FAIL).
+- File and run verdict (`model.file_verdict`): the worst severity, except that SKIPPED alone is
+  PASS (a file whose only non-PASS results are SKIPPED shows PASS; user decision). SKIPPED
+  findings stay in `summary.counts` and are listed (console without -v too). Exit code unchanged.
+- `params_schema`: build it with `schemas.check_params(required, **props)` (additionalProperties
+  false). `engine.validate_profile_params(profile, substituted)` runs at config time (`cmr check`
+  after substitution, `cmr profiles show`): unknown param names for every check entry (enabled
+  or not), values only for enabled checks once substituted; errors = ConfigError, exit 3,
+  message `checks.<id>: unknown parameter(s) 'x' (allowed: ...)`. run_file still validates
+  (ERROR finding) for library callers. Strict: every check (the four audio content checks
+  joined in the D31 round; every stock profile, template and example pair still loads).
 - Profile check entry: reserved keys `enabled` (default true), `severity` (default fail),
   `quality` (fast|high, default high), `max_findings` (report cap, see "Findings cap"; not
   passed to the check; `engine.RESERVED_KEYS`); everything else is params. Spec values reach checks only via `${spec.*}` refs in the profile
   (whole-value refs keep type; pass whole sections like `timing: "${spec.timing}"` when a
-  check needs optional keys).
+  check needs optional keys). Substitution is LAZY for checks with `enabled: false`
+  (`config.resolve_profile`): their entries keep the refs verbatim, so a spec without e.g. an
+  audio section loads a profile whose audio checks are off; an enabled check with a missing key
+  is still a ConfigError (D4). Spec scalars that checks treat as "not specified" may be null:
+  video width/height, timing file_start_timecode / program_start_timecode /
+  program_duration_frames, audio sample_rate / bit_depth (`schemas._opt_int`).
+
+## job.yaml as the entry point (D31; report schema 1.4)
+- Job file (`config.JOB_SCHEMA`, `job_version: 1`): sections `job` / `deliverables` / `slate`
+  (merged into the spec as before, D27) plus top-level run keys `spec`, `profile`, `waivers`,
+  `output`; `job.id` = short job id (`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`; `*` reserved). All
+  paths relative to the job file (`config.job_settings`); `profile` stays a stock name unless
+  it has a `/` or ends in .yaml/.yml. A job file without the new keys works as before.
+- Which job file (`config.find_job`): `--job PATH`, else `--job-dir DIR` (DIR/job.yaml), else
+  `./job.yaml` when it exists, unless `--no-job` (the three are mutually exclusive; on `cmr
+  check` and `cmr waive`). An explicit one that is missing = config error (exit 3). When
+  ./job.yaml is picked up by itself, `cmr check` prints `job file: PATH (job ID)` to stderr.
+- `cmr check` (`cli.apply_job`): options win; the job fills only what the command line left
+  out: spec, profile, waivers (the job's `waivers`, default `waivers.yaml` next to job.yaml,
+  used only when the file exists: no waiver file yet = no waivers, logged), `output` (report
+  folder; it also turns `--report json` on, also when `-o` moves the folder). Without spec or
+  profile from either side: `error: --spec and --profile required: ...` exit 3. `--spec` and
+  `--profile` are no longer argparse-required.
+- Report 1.4 (additive): `summary.job_id` (job file `job.id`, null without one; a spec sheet's
+  own `job.id` is not used), `waivers.foreign`; console `JOB <id>` line before `RESULT`, and
+  `foreign N` + `foreign (job X, not applied): Wnnnn ...` lines. Log `check:` line: job file
+  (redacted path), job id (redacted `name` token in default mode) and how it was found.
+- Waivers carry the job (`waivers.split_job`): an entry with `job: <id>` applies only to runs
+  of that job id; `job: "*"` to every job; an entry WITHOUT `job` (files from before D31)
+  applies to every run (backward compatible); entries of another job (or any `job:` entry in
+  a run without job id) are skipped and listed in `waivers.foreign` (with `job`). Summary
+  entries carry `job` when set. Waiver file version unchanged (1/2): `job` is an optional key.
+- `cmr waive` (`cli._waive_job`): in a job (same three options) the default `-o` is the job's
+  waiver file (else ./waivers.yaml) and new entries get `job: <job.id>`; without a job file the
+  report's `summary.job_id` is stamped; a report of another job than the job file = error;
+  `--any-job` stamps `job: "*"`. Listings show the media path relative to the job folder (else
+  the cwd), or the base name when outside it (`cli._short`, symlinks not resolved).
+- Missing `${spec.*}` keys raise `config.MissingSpecKey` (a ConfigError; `str()` unchanged:
+  `missing spec key ${spec.x} (no 'x')`) with `where` (`profile check ID (profile 'P')`, or the
+  job section); `explain(spec_path, job_path)` is what `cmr check` / `cmr profiles show` print:
+  the field as YAML path (`audio: loudness:`), the spec sheet path, for job sections
+  (job/deliverables/slate) the job file (or "none is in use"), "switch that check off" for
+  profile checks, and the guide section "Spec sheets: the job facts".
+- `cmr doctor` also prints `log: PATH` and `job.yaml in the current folder: none | PATH (job
+  ID) | PATH - INVALID: ...` (informational, never a doctor failure).
+
+## Packaging, report files, `--quality` (report schema 1.3)
+- pyproject has an explicit `[build-system]` (setuptools>=61, `setuptools.build_meta`); the
+  offline wheel build (`installer/build_bundle.sh --python /usr/bin/python3`, setuptools 78.1)
+  still works.
+- Install: `pip install .` ships the stock profiles as package data: pyproject maps the repo's
+  top-level `profiles/` to package `cmr.profiles` (`package-dir`, `*.yaml`; explicit package
+  list, guarded by tests/unit/test_cli_config.py). `config.stock_profiles_dir()`:
+  `importlib.resources.files("cmr")/profiles` when it exists (installed), else `<repo>/profiles`
+  (source tree, `PYTHONPATH=src`, and `pip install -e .`, which keeps editing the repo's files).
+  `--profile PATH.yaml` and `extends` next to the extending file work unchanged. Templates,
+  examples and slate templates are not packaged (no code path loads them by default).
+  Verified: `pip install --target` (dev box, Python 3.12.3) and a venv on the Rocky machine (Python
+  3.12.15): `cmr profiles list` from /tmp lists all stock profiles from site-packages; editable
+  install resolves to the repo's profiles/. Version single source: `cmr.__version__`
+  (pyproject `dynamic = ["version"]`, `attr`). A non-editable `pip install .` leaves `build/` in
+  the source folder (not in .gitignore).
+- `cmr check --report json [-o DIR]`: DIR defaults to the current directory. Each run writes
+  `DIR/cmr_report_<YYYYmmdd-HHMMSS>_<run id>.json` (run id = the log's `run=`, `log.run_id()`)
+  and replaces `DIR/cmr_report_latest.json` (a copy, written to a temp file + `os.replace`; a
+  copy rather than a symlink so it works on any file share). Scripts read the latest copy;
+  `cmr waive` takes any report path. A failed write exits 3.
+- `cmr check --quality fast|high` (`cli.apply_quality`, after substitution and param checks):
+  sets `quality` on every ENABLED check whose class implements that mode; checks without it
+  keep the profile's (i.e. high). Precedence: `--quality` > profile `quality` > `high`. Logged
+  (`quality fast (--quality ...): set on [...]; ... kept as profiled: [...]`). Report 1.3
+  (additive): `summary.mode` (foreground|background, D26) and `summary.quality` (fast|high,
+  or `profile` without the flag); per-finding `quality` stays the mode actually used.
+  `cmr waive` accepts reports 1.0-1.4.
 
 ## Waivers (D17) - `src/cmr/waivers.py`, report schema 1.1 (1.2: category waivers, cap)
 - CLI: `cmr check ... --waivers W.yaml`; `cmr waive REPORT.json` (lists waivable findings with
   their number N = 1-based position over all findings of all files in the report),
   `cmr waive REPORT.json --finding N ... | --all-check ID --reason TEXT [--expires YYYY-MM-DD]
-  [-o W.yaml]` (default `./waivers.yaml`; appends, ids W0001...). The media path is the report's
+  [-o W.yaml]` (default `./waivers.yaml`, in a job the job's waiver file, D31; appends, ids W0001...). The media path is the report's
   `files[].path` (relative to the cwd of `cmr check`); its identity (size + head/tail sha) must
   equal the report's, else error. Waivable: `video.*`/`audio.*` findings with a frame range and
   stream, severity INFO/WARN/FAIL. Metadata/file-level findings are not waivable in v1.
@@ -156,6 +250,9 @@ class Black(Check):
   `kind`/`edge`/`channel`/`max_severity`. Console: one `WAIVED ... N finding(s) by category
   waiver Wnnnn (worst was X)` line per check and waiver, and one `category Wnnnn <scope>: N
   finding(s) waived: reason` line under WAIVERS; stale/expired category waivers print their scope.
+- Slate findings (D27): `media_kind` `slate` for `slate.*`; fingerprint `slate_text` =
+  [evidence kind, exact OCR text] (frames [], tolerance 0), computed from the finding itself (no
+  decode) in `cmr waive` and in `apply`; see checks/slate/CLAUDE.md.
 - Limits: a whole-frame dHash does not see a change of the defect itself (e.g. a 1 px blanking
   line becoming 4 px) when the picture stays the same; black/silent evidence fingerprints are
   constant (black is black). Audio envelope does not see timbre changes at equal level. Files
@@ -182,7 +279,7 @@ class Black(Check):
   `build_report(..., max_findings=0)` (library default) lists everything.
 - `cmr waive REPORT.json` numbers only listed findings; suppressed findings cannot be waived
   per finding from a capped report (it prints a note: re-run with `--max-findings 0`, or use
-  `--category`). Reports 1.0/1.1/1.2 are accepted.
+  `--category`). Reports 1.0-1.4 are accepted.
 
 ## Verified ffmpeg/ffprobe facts (ffmpeg 6.1.1; other builds, e.g. Rocky, UNVERIFIED - run `cmr doctor`)
 - `-filter_complex` with all branches ending in `nullsink` is rejected ("A filtergraph has
@@ -199,6 +296,17 @@ class Black(Check):
 - SCC timestamps are taken as file time when stream-copied: a caption at 00:59:59:xx is beyond
   the file end and gets dropped (generator uses 00:00:00:01).
 - libx264 `-flags +ildct+ilme -x264opts tff=1` -> ffprobe field_order interlaced (tt).
+- MXF (also on 5.1.10; ffmpeg mxf muxer output + two real masters): timecode only as FORMAT tag
+  `timecode` (media falls back to it, `MediaInfo.timecode_source`); `operational_pattern_ul`
+  format tag (-> `MediaInfo.mxf_op`); no video `nb_frames` (frames from duration); PCM
+  `channel_layout` absent; DNxHD `profile` 'DNXHD', no `bit_rate` -> the first-frames ffprobe
+  call also reads `frame=pkt_size` (DNxHD class, see checks/CLAUDE.md). `-timecode` and
+  `-c:v dnxhd -b:v 175M` / `mpeg2video -flags +ilme+ildct -top 1` write OP1a MXF test media.
+- 436M VANC data stream: tag `data_type: vbi_vanc_smpte_436M`; `-select_streams N -show_packets
+  -show_data -read_intervals %+#K` returns exactly K packets as a hexdump (`cmr/vanc.py`); real
+  26 GB master 0.3 s (6.1.1) / 0.5 s (5.1.10), identical counts. A real master's first video
+  frame also carried an MPEG-2 GOP timecode that differed from the format tag (not used).
+- Pixel formats `yuvj*` -> base format + range pc in media.py (`pixel_format_raw` keeps the name).
 
 ## ffmpeg 5.1.10 (Rocky 9.7) vs 6.1.1 - measured differences
 - Full test suite passes on both (97) after the test-media fixes below; engine command and
@@ -215,3 +323,65 @@ class Black(Check):
   queued audio (nondeterministic: 3072/7168/... of 19200 samples); 6.1 keeps it. Use `-t` or
   `trim=end_frame=N` instead (`ffmpeg -h filter=trim` on both). The engine never limits frames,
   so checks are not affected.
+
+## Logging (D29) - `src/cmr/log.py`
+- One file, LTX_OFX conventions: `$CMR_LOG_DIR/cmr.log`, else `$XDG_CACHE_HOME/cmr/logs/cmr.log`,
+  else `~/.cache/cmr/logs/cmr.log`; `--log-file F` overrides. Rotated only at start (`log.setup`)
+  when >= 10 MB, 5 old files (`cmr.log.1..5`, flock on `.rotate.lock`); never mid-run. Every line
+  is one `os.write` on an O_APPEND fd, so concurrent `cmr` processes interleave whole lines.
+- Line: `YYYY-MM-DD HH:MM:SS.mmm LEVEL comp[pid/tid] run=<6 hex> file=<8 hex|-> | msg` (local
+  time, LEVEL padded to 5: `DEBUG INFO  WARN  ERROR`; comp = module (`cli`, `engine`, `media`,
+  `waivers`, `report`, `deliverables`, `runmode`, `slate`) or the check id; run = random per
+  invocation; file = salted hash of the resolved path of the file being checked). Tracebacks
+  follow on the next lines.
+- Levels `--log-level debug|info|warn|error|off`, env `CMR_LOG_LEVEL`; default from ONE constant
+  `log.LOG_DEFAULT_ENABLED` (True = INFO now; planned flip to OFF by default). The options are
+  accepted before or after the subcommand. `cmr logs path|tail` do not write to the log.
+- Never breaks a run: an unwritable log dir prints ONE stderr line and logs WARN+ to stderr;
+  handler/formatting errors are swallowed; without `setup()` (library use, tests) the `cmr`
+  logger is silent (NullHandler, no propagation). Tests set `CMR_LOG_DIR` to a temp dir (conftest).
+- Privacy, two modes. Default: `log.redact(kind, value)` (THE helper; use it for every private
+  value) returns a token = salted sha256 prefix + non-private facts: `<path#1a2b3c4d.mov>`,
+  `<text#.. len=14>`, `<row#..>`, tool paths `<dir#..>/ffmpeg` (system bin dirs verbatim). The
+  salt is per installation (`<logdir>/salt`, 0600, never bundled), so tokens are stable across
+  runs on one machine and differ between machines. Every redacted path/name/text/arg/user/host
+  value (and a path's base name; >= 4 chars, not digits only; `log.SCRUB_KINDS`) is registered
+  and scrubbed from the message part of every later line (stderr, tracebacks); `value`/`row`
+  tokens are not (ordinary words, numbers); `$HOME` becomes `~`. `log.redact_quoted(msg)` redacts quoted values in finding/config-error
+  messages and exception lines. Commands: `log.redact_cmd` (inputs, `-i`, `file=` in graphs).
+  Private mode (`--log-private`, env `CMR_LOG_PRIVATE=1`): everything verbatim. The mode is the
+  `env privacy:` line of every snapshot. Image/audio data is never logged. Limit: a value that
+  was never redacted and is not quoted (e.g. an unquoted CSV value inside some exception text)
+  would pass through; profile string params are therefore redacted wholesale at DEBUG.
+- What is logged: `start` (redacted argv) and `end` (exit code, time, memory); environment
+  snapshot (`env ...` lines: cmr version + git, privacy, log path/level, host, user, OS/kernel/
+  glibc, Python, ffmpeg/ffprobe path + version, filter count + sha256 digest + missing required
+  filters + plugin import errors, tesseract, CPUs, RAM, GPU via nvidia-smi, nice/ionice/
+  RLIMIT_AS) for `check` and `doctor`; `check:` inputs line, `inputs:` profile/spec/job/waiver
+  sha256, resolved profile per check at DEBUG, run mode/threads/limits; per file: identity/probe,
+  media summary (extension, size, codecs, fps, streams, TC), timeline, timeline problems (WARN),
+  checks enabled, tap layout (DEBUG: every tap chain), main pass short form (INFO) and full command
+  incl. filtergraph (DEBUG), records parsed, decoded frames, memory (RSS/peak of cmr, peak of
+  children via `/proc` + getrusage); per check `done in X s (records, detect, evaluate)`, candidates,
+  findings by severity, finding detail (DEBUG, messages redacted), Skip, ConfigError, crashes with
+  full traceback (ERROR; the report keeps the short "check crashed" finding); every external
+  command via `log.run` (exit code, duration, first/last 5 stderr lines; WARN on failure or stderr
+  output; full command at DEBUG): ffprobe x2, ffmpeg main pass, slate/bars seeks, waiver
+  fingerprint seeks (DEBUG), tesseract, ionice, `-filters`/`-version` (DEBUG); slate OCR per
+  frame (words, mean/min confidence, labels found/missing), per field text/length/confidence
+  (DEBUG), uncertain reads (WARN); deliverables row selection (how, row number, filename groups,
+  row values at DEBUG); waivers (loaded, per waiver at DEBUG, content changed INFO, fingerprint
+  failures WARN, summary counts); cap decisions per check; report build/write; summary; an
+  unhandled exception in any command (traceback, exit 3).
+- Support bundle: `cmr logs collect [-o FILE] [--reports DIR [--last N]]` -> tar.gz (default
+  `./cmr-support-YYYYmmdd-HHMMSS.tar.gz`): `logs/cmr.log*`, `environment.txt` (snapshot now,
+  same privacy mode), `reports/NN_<name>.json` (newest N `*.json` under DIR, verbatim: reports
+  hold paths and slate text). `cmr logs path`, `cmr logs tail [-n N]`.
+- Debugging a slate problem: ask for `cmr check ... --log-level debug --log-private` then
+  `cmr logs collect`; the log then shows the OCR text per field and frame, confidences, the
+  selected CSV row and the compared values. In default mode the same lines show tokens and
+  lengths only (equal tokens = equal text on that machine).
+- Measured overhead (dev machine, 5 runs each, median): 96-frame test file 1.255 s off / 1.329 s
+  info / 1.339 s debug; slate spot (short, OCR skipped) 2.984 / 3.063 / 3.077 s. INFO costs a
+  fixed ~75 ms per invocation (snapshot subprocesses: ffmpeg/ffprobe -version, nvidia-smi, git,
+  ionice), independent of file length; per-file logging is a few ms.

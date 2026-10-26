@@ -41,7 +41,7 @@ def test_substitution_errors(bad):
 def test_extends_merge_and_list_replace(tmp_path):
     w(tmp_path, "base", {"profile_version": 1, "name": "base", "checks": {
         "a": {"severity": "fail", "x": 1, "lst": [1, 2], "nested": {"p": 1, "q": 2}},
-        "b": {"y": "${spec.video.width}"}}})
+        "b": {"y": "${spec.video.width}"}, "c": {"y": "${spec.video.width}"}}})
     child = w(tmp_path, "child", {"profile_version": 1, "name": "child", "extends": "base",
                                   "checks": {"a": {"lst": [9], "nested": {"q": 3}},
                                              "b": {"enabled": False}}})
@@ -51,7 +51,8 @@ def test_extends_merge_and_list_replace(tmp_path):
     assert merged["checks"]["b"] == {"y": "${spec.video.width}", "enabled": False}
     assert len(shas) == 2
     resolved, _ = resolve_profile(str(child), SPEC)       # substitution after extends
-    assert resolved["checks"]["b"]["y"] == 1920
+    assert resolved["checks"]["c"]["y"] == 1920
+    assert resolved["checks"]["b"]["y"] == "${spec.video.width}"   # disabled: lazy, not looked up
 
 
 def test_extends_cycle(tmp_path):

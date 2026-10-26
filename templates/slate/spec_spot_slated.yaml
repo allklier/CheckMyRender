@@ -1,0 +1,42 @@
+# =====================================================================================
+# SPEC SHEET TEMPLATE - slated spot (technical part; job data lives in job.yaml)
+# =====================================================================================
+# Same as templates/specs/spec_spot_short_form.yaml but WITHOUT a `job:` section: for a
+# slated job the job constants and the filename pattern come from job.yaml (cmr merges
+# the two; a value typed differently in both files is a config error).
+#
+# Run:  cmr check "SPOT.mov" --profile spot_review --spec spec_spot_slated.yaml --job job.yaml
+# =====================================================================================
+spec_version: 1
+video:
+  container: mov
+  codec: prores
+  codec_profile: "422 HQ"
+  width: 1920
+  height: 1080
+  fps: "30000/1001"                  # 29.97 exact
+  scan: progressive
+  pixel_format: yuv422p10le
+  color: {primaries: bt709, transfer: bt709, matrix: bt709, range: tv}
+  aspect_ratio: "16:9"
+  pixel_aspect: 1.0
+timing:
+  timecode_mode: non-drop
+  program_start_timecode: "01:00:00:00"
+  program_duration_frames: 900       # EDIT: :30 = 30 timecode seconds x 30 = 900 frames
+  head_layout:                       # 5 s slate, 2 s black, content from file frame 210
+    - {type: slate, frames: 150}
+    - {type: black, frames: 60}
+    - {type: program}
+  tail_layout: []                    # no tail black, no extra frames
+audio:
+  sample_rate: 48000
+  bit_depth: 24
+  codec: pcm_s24le
+  tracks:
+    - {index: 0, layout: stereo, content: "Stereo mix L/R"}
+  loudness:
+    standard: "ATSC A/85"
+    program_track: 0
+content:
+  captions: {required: false}

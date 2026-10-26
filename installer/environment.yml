@@ -1,0 +1,23 @@
+# CheckMyRender conda environment (template; install.sh reads the dependency list from here).
+#
+# install.sh does NOT use the `channels:` list below: it always runs conda with
+# `--override-channels -c conda-forge` (no Anaconda `defaults` channel, no Anaconda ToS/licence
+# question). The list is here so a human can also do `conda env create -p DIR -f environment.yml`.
+#
+# Tags (read by install.sh):
+#   # cmr:ffmpeg  only when the system ffmpeg/ffprobe fail the acceptance test (version >= 5.1
+#                 and every filter in required_filters.txt); never replaces the system ffmpeg
+#   # cmr:slate   only without --no-slate (tesseract for the slate OCR checks, D27)
+# Untagged lines are always installed. PyYAML and jsonschema come from conda-forge so the cmr
+# wheel is installed with `pip --no-deps --no-index` (pip never contacts PyPI).
+name: cmr
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.12
+  - pip
+  - pyyaml
+  - jsonschema
+  - ffmpeg=6.1        # cmr:ffmpeg
+  - tesseract=5.5     # cmr:slate

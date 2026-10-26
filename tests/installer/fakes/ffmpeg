@@ -1,0 +1,22 @@
+#!/bin/bash
+# Fake ffmpeg/ffprobe. FAKE_FF_VERSION / FAKE_FP_VERSION, FAKE_FF_MISSING (filters to drop).
+# A copy inside a conda env (path contains /env/bin/) reports 6.1.2 with all filters.
+name=$(basename "$0")
+case $0 in */env/bin/*) v=6.1.2; miss="";; *)
+    v=${FAKE_FF_VERSION:-6.1.1}; [ "$name" = ffprobe ] && v=${FAKE_FP_VERSION:-$v}; miss=" ${FAKE_FF_MISSING:-} ";; esac
+echo "$name $*" >>"$FAKE_CALLS"
+for a in "$@"; do
+    case $a in
+        -version) echo "$name version $v Copyright (c) 2000-2026 the FFmpeg developers"; exit 0;;
+        -filters)
+            echo "Filters:"; echo "  T.. = Timeline support"; echo "  ---"
+            while read -r f; do
+                case $f in ''|'#'*) continue;; esac
+                case "$miss" in *" $f "*) continue;; esac
+                printf ' T.C %-16s V->V       fake %s\n' "$f" "$f"
+            done <"$FAKE_FILTERS"
+            printf ' ... %-16s |->V       fake source\n' testsrc2
+            exit 0;;
+    esac
+done
+last="${!#}"; : >"$last"   # "generate" the output file

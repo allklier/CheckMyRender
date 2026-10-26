@@ -1,0 +1,7 @@
+#!/bin/bash
+# Fake env python: only `-m pip install ... WHEEL` and `-m pip check`.
+echo "python $* PYTHONPATH=${PYTHONPATH:-unset} PIP_CONFIG_FILE=${PIP_CONFIG_FILE:-unset}" >>"$FAKE_CALLS"
+if [ "$1 $2 $3" = "-m pip install" ]; then
+    cp "$FAKES/cmr" "$(dirname "$0")/cmr"; chmod +x "$(dirname "$0")/cmr"
+fi
+exit 0

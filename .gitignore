@@ -4,5 +4,6 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 CLAUDE.local.md
-docs/slate-design.md
+docs/slate-*
 docs/sample_slate.png
+build/

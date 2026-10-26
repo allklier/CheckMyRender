@@ -3,6 +3,9 @@
 
     python3 tests/media/make_media.py OUTDIR [CASE ...]     # default: all CASES
 
+Cases: good, wrong_meta, wrong_tc, short, no_captions, corrupt (spec_test.yaml), one_track
+(as good but one stereo track and no captions: templates/specs/spec_review_render.yaml).
+
 Each case is written to OUTDIR/<case>/<filename> (the filename is part of what is checked,
 so cases live in separate directories). Other test modules can call
 `make(outdir, case_name, **overrides)` with any key of BASE, e.g. extra filters to plant
@@ -61,6 +64,9 @@ CASES = {
     "short": dict(program=40),
     "no_captions": dict(captions=False),
     "corrupt": dict(corrupt=True),
+    # one stereo track, no captions: the good file in the shape of
+    # templates/specs/spec_review_render.yaml (USERGUIDE quick start A)
+    "one_track": dict(audio_tracks=1, captions=False),
 }
 
 SCC = "Scenarist_SCC V1.0\n\n{tc}\t9420 9420 94ae 94ae 9452 9452 97a2 97a2 c845 4c4c cf80 942c 942c 942f 942f\n\n"

@@ -1,0 +1,86 @@
+# =====================================================================================
+# SPEC SHEET TEMPLATE - generic file-based master / deliverable
+# =====================================================================================
+# A spec sheet holds the FACTS of one job: what the delivered file must look like.
+# The RULES (which checks run, how strict, what is a FAIL or only a WARN) live in a
+# profile. Use this spec with e.g. --profile release or a copy of
+# templates/profiles/client_delivery.yaml.
+#
+# How to use:
+#   1. Copy this file next to your job, e.g. specs/spec_<client>_<job>_master.yaml
+#   2. Replace every value marked EDIT. Leave the structure as it is.
+#   3. Check that it loads:
+#        cmr profiles show release --spec specs/spec_<client>_<job>_master.yaml
+#   4. Run it:
+#        cmr check MY_RENDER.mov --profile release --spec specs/spec_<client>_<job>_master.yaml
+#
+# Tip: run `cmr probe KNOWN_GOOD_RENDER.mov` on a render you trust. It prints the values
+# exactly in the words this file uses (codec_profile "422 HQ", pixel_format, colour ...).
+#
+# Every key below is used by the stock profiles (profiles/final.yaml). If you delete a key
+# that a profile refers to, cmr stops with "missing spec key ${spec....}" (exit 3).
+# =====================================================================================
+spec_version: 1                      # always 1
+
+job:
+  title: "Example Feature"           # EDIT: human-readable title (free text)
+  title_code: "EXFEAT"               # EDIT: filename-safe code (letters, digits, no spaces)
+  episode: "101"                     # EDIT: episode / reel / version label used in the filename
+  version: "v01"                     # EDIT
+  client: "Example Client"           # EDIT: informational only
+  # Expected filename. Either spell it out ...
+  # filename: "EXFEAT_101_HD_2398_ST_v01.mov"
+  # ... or give a pattern. {title_code}, {episode}, {version} come from this `job:` section;
+  # {format}, {fps_tag}, {audio_tag} are tags the profile builds from the video/audio values
+  # below (profiles/final.yaml: 1080 -> HD, 24000/1001 -> 2398, stereo -> ST).
+  # If both are given, `filename` wins.
+  naming_pattern: "{title_code}_{episode}_{format}_{fps_tag}_{audio_tag}_{version}.mov"
+
+video:
+  container: mov                     # mov | mp4 | mxf ... as `cmr probe` prints it
+  codec: prores                      # prores | h264 | dnxhd ... (ffprobe codec name)
+  codec_profile: "422 HQ"            # ProRes: "422 Proxy" | "422 LT" | "422" | "422 HQ" | "4444" | "4444 XQ"
+  width: 1920
+  height: 1080
+  fps: "24000/1001"                  # ALWAYS an exact fraction in quotes: "24000/1001" (23.976),
+                                     # "24", "25", "30000/1001" (29.97), "60000/1001". Never 23.976.
+  scan: progressive                  # progressive | interlaced
+  pixel_format: yuv422p10le          # 10-bit 4:2:2 (ProRes 422). ProRes 4444: yuva444p10le or yuv444p12le
+  color: {primaries: bt709, transfer: bt709, matrix: bt709, range: tv}   # tv = legal/limited range
+  aspect_ratio: "16:9"               # display aspect ratio
+  pixel_aspect: 1.0                  # square pixels
+
+timing:
+  timecode_mode: non-drop            # non-drop | drop (drop only exists at 29.97 / 59.94)
+  program_start_timecode: "01:00:00:00"   # timecode of the first program frame (FFOA)
+  # file_start_timecode: "00:59:59:00"    # optional; if omitted it is derived:
+  #                                       # program_start_timecode minus the head frames below
+  program_duration_frames: 2880      # EDIT: program length in FRAMES (head and tail excluded).
+                                     # 2 min at 23.976 = 120 x 24 = 2880 (timecode seconds x 24)
+  # Head = what comes before the program, in order from the first frame of the file.
+  # Segment types: slate, black, bars_tone, two_pop, program. `program` must be last.
+  # The frame counts are what cmr uses to find the program; it does not (yet) look at
+  # what is inside each head segment.
+  head_layout:
+    - {type: slate, frames: 1}       # EDIT to your house standard
+    - {type: black, frames: 23}
+    - {type: program}
+  tail_layout:                       # what follows the program; [] = nothing
+    - {type: black, frames: 24}
+
+audio:
+  codec: pcm_s24le                   # 24-bit PCM. 16-bit: pcm_s16le. AAC: aac (bit depth then not compared)
+  sample_rate: 48000
+  bit_depth: 24
+  # One entry per AUDIO STREAM in the file, in file order (index 0 = first audio stream).
+  # layout: mono | stereo | 5.1 | 7.1   (anything else is SKIPPED by the layout check)
+  tracks:
+    - {index: 0, layout: stereo, content: "Stereo mix L/R"}
+  loudness:
+    standard: "EBU R128"             # "EBU R128" or "ATSC A/85" - the numbers are in the profile
+    program_track: 0                 # which audio stream (0 = first) carries the main mix
+
+content:
+  # Embedded captions only (608 in a MOV caption track, or 608/708 in H.264).
+  # required: false = not checked.
+  captions: {required: false, formats: [embedded_608]}

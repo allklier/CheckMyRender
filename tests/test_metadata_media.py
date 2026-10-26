@@ -27,7 +27,7 @@ def media():
 def run(tmp_path, files, profile="final", extra=()):
     rc = main(["check", *map(str, files), "--profile", profile, "--spec", SPEC,
                "--report", "json", "-o", str(tmp_path), *extra])
-    rep = json.loads((tmp_path / "cmr_report.json").read_text())
+    rep = json.loads((tmp_path / "cmr_report_latest.json").read_text())
     jsonschema.validate(rep, REPORT_SCHEMA)
     return rc, rep
 

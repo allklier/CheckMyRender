@@ -9,6 +9,7 @@ Profile rules (CLAUDE.md "Substitution rules"):
   interpolated with str(); the referenced value must then be a scalar.
 - Path segments that are integers index into lists (${spec.audio.tracks.0.layout}).
 - Missing key = ConfigError. Only the `spec.` namespace exists; no expressions.
+- Lazy: entries of checks with `enabled: false` are not substituted (refs kept verbatim).
 - Per check: reserved keys `enabled` (default true), `severity` (default fail),
   `quality` (fast|high, default high) and `max_findings` (report cap, 0 = all; default
   from `cmr check --max-findings`, 10); all other keys are check params.
@@ -17,20 +18,60 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib.resources
 import re
 from pathlib import Path
 
 import jsonschema
 import yaml
 
-from .schemas import SPEC_SCHEMA, PROFILE_SCHEMA
+from .schemas import JOB_SCHEMA, SPEC_SCHEMA, PROFILE_SCHEMA
 
-PROFILES_DIR = Path(__file__).resolve().parents[2] / "profiles"
+
+
+def stock_profiles_dir() -> Path:
+    """Folder of the stock profiles. Installed (`pip install .`): package data `cmr/profiles`
+    (pyproject maps the repo's profiles/ to package `cmr.profiles`); source tree and editable
+    install: the repo's top-level profiles/ (src/cmr has no profiles folder there)."""
+    pkg = Path(str(importlib.resources.files("cmr").joinpath("profiles")))
+    if pkg.is_dir():
+        return pkg
+    return Path(__file__).resolve().parents[2] / "profiles"
+
+
+PROFILES_DIR = stock_profiles_dir()
 _REF = re.compile(r"\$\{([^}]*)\}")
 
 
 class ConfigError(ValueError):
     pass
+
+
+class MissingSpecKey(ConfigError):
+    """A `${spec.*}` reference whose key the spec does not have (D4). `field` = the dotted
+    spec field (e.g. audio.loudness), `missing` = the first absent part, `where` = who
+    references it (set by the caller). `explain()` gives the user-facing text (D31)."""
+
+    def __init__(self, ref: str, field: str, missing: str):
+        self.ref, self.field, self.missing, self.where = ref, field, missing, None
+        super().__init__(f"missing spec key ${{{ref}}} (no '{missing}')")
+
+    def explain(self, spec_path=None, job_path=None) -> str:
+        top = self.field.split(".")[0]
+        yaml_path = ": ".join(self.field.split(".")) + ":"
+        sheet = "the spec sheet" + (f" {spec_path}" if spec_path else "")
+        lines = [f"missing spec key ${{{self.ref}}}" + (f", used by {self.where}" if self.where else ""),
+                 f"  the spec has no '{self.missing}'."]
+        if top in JOB_SECTIONS:   # job-level data: normally in the job file (D27, D31)
+            lines.append(f"  Fill in `{yaml_path}` in the job file " + (
+                f"{job_path}" if job_path else "(none is in use: pass --job, or run `cmr check` "
+                f"in the folder of {JOB_FILE})") + f" or in {sheet}")
+        else:
+            lines.append(f"  Fill in `{yaml_path}` in {sheet}")
+        if self.where and self.where.startswith("profile check"):
+            lines.append("  or switch that check off in the profile (`enabled: false`).")
+        lines.append("  Spec fields are explained in USERGUIDE.md, \"Spec sheets: the job facts\".")
+        return "\n".join(lines)
 
 
 def _load_yaml(path: Path) -> tuple[dict, str]:
@@ -59,7 +100,115 @@ def load_spec(path: Path) -> tuple[dict, str]:
     spec, sha = _load_yaml(path)
     _validate(spec, SPEC_SCHEMA, f"spec {path}")
     _check_layout_shape(spec.get("timing") or {})
-    return spec, sha
+    return resolve_paths(spec, Path(path).resolve().parent), sha
+
+
+JOB_SECTIONS = ("job", "deliverables", "slate")
+_PATH_KEYS = (("deliverables", "csv"), ("slate", "template"))   # relative to the file that sets them
+JOB_FILE = "job.yaml"            # D31: found in the current folder (or --job / --job-dir)
+JOB_WAIVERS = "waivers.yaml"     # D31: default waiver file next to job.yaml
+_RUN_KEYS = ("spec", "waivers", "output")   # job.yaml top-level paths (D31); `profile` see below
+
+
+def resolve_paths(data: dict, base: Path) -> dict:
+    """deliverables.csv / slate.template given relative to `base` (the file's folder)."""
+    for sec, key in _PATH_KEYS:
+        v = (data.get(sec) or {}).get(key)
+        if isinstance(v, str) and v and not Path(v).is_absolute():
+            data[sec][key] = str((Path(base) / v).resolve())
+    return data
+
+
+def load_job(path: Path) -> tuple[dict, str]:
+    """Job file (D27): job constants, deliverables CSV settings, slate template + expectations."""
+    job, sha = _load_yaml(path)
+    _validate(job, JOB_SCHEMA, f"job file {path}")
+    return resolve_paths(job, Path(path).resolve().parent), sha
+
+
+def find_job(job: str | None = None, job_dir: str | None = None, no_job: bool = False,
+             cwd: Path | None = None) -> Path | None:
+    """The job file of a run (D31): `--job PATH`, else `--job-dir DIR` (DIR/job.yaml), else
+    ./job.yaml when it exists (not with `--no-job`). An explicit one must exist."""
+    if job:
+        p = Path(job)
+    elif job_dir:
+        p = Path(job_dir) / JOB_FILE
+    else:
+        p = Path(cwd or Path.cwd()) / JOB_FILE
+        return None if no_job or not p.is_file() else p
+    if not p.is_file():
+        raise ConfigError(f"job file {p} not found")
+    return p
+
+
+def job_settings(path: Path) -> dict:
+    """What a job file says about the run (D31): {path (as given), dir, id, spec, profile,
+    waivers, waivers_named, output}. Other paths are absolute (relative ones resolve from the job file's
+    folder). `profile` stays a stock profile name unless it looks like a path (has `/` or ends
+    in .yaml/.yml). `waivers` defaults to waivers.yaml next to the job file (it may not exist
+    yet: no waivers); `waivers_named` says whether the job file set it."""
+    data, _ = load_job(path)
+    base = Path(path).resolve().parent
+    out = {"path": str(path), "dir": str(base),
+           "id": (data.get("job") or {}).get("id")}
+    for k in _RUN_KEYS:   # `~` allowed; an absolute path stays as it is
+        out[k] = str((base / Path(data[k]).expanduser()).resolve()) if data.get(k) else None
+    prof = data.get("profile")
+    if prof and ("/" in prof or Path(prof).suffix in (".yaml", ".yml")):
+        prof = str((base / Path(prof).expanduser()).resolve())
+    out["profile"] = prof
+    out["waivers_named"] = out["waivers"] is not None
+    if out["waivers"] is None:
+        out["waivers"] = str(base / JOB_WAIVERS)
+    return out
+
+
+def _merge_strict(base, add, where: str):
+    """Deep merge; the same key with a DIFFERENT scalar/list value in both is a ConfigError
+    (a value is never typed twice: spec and job file must not contradict each other)."""
+    if isinstance(base, dict) and isinstance(add, dict):
+        out = dict(base)
+        for k, v in add.items():
+            out[k] = _merge_strict(base[k], v, f"{where}.{k}") if k in base else copy.deepcopy(v)
+        return out
+    if base != add:
+        raise ConfigError(f"{where} is set in both the spec ({base!r}) and the job file ({add!r})")
+    return copy.deepcopy(add)
+
+
+def merge_job(spec: dict, job: dict) -> dict:
+    """The job file is the job-level part of the spec: merged into one spec (sections job,
+    deliverables, slate); contradicting values are a ConfigError."""
+    out = copy.deepcopy(spec)
+    for sec in JOB_SECTIONS:
+        if sec in job:
+            out[sec] = _merge_strict(out.get(sec) or {}, job[sec] or {}, sec)
+    return out
+
+
+def build_spec(spec_path, job_path=None, deliverables_csv=None, row=None) -> tuple[dict, dict]:
+    """The one merged spec: spec sheet + job file (D27) + run-time `--deliverables`/`--row`.
+    `${spec.*}` refs inside the job sections are resolved here (load time, D4); `{ns.*}`
+    tokens stay for run time. Returns (spec, inputs {spec: {path, sha256}, job: {...}})."""
+    spec, sha = load_spec(Path(spec_path))
+    inputs = {"spec": {"path": str(spec_path), "sha256": sha}}
+    if job_path:
+        job, jsha = load_job(Path(job_path))
+        spec = merge_job(spec, job)
+        inputs["job"] = {"path": str(job_path), "sha256": jsha}
+    if deliverables_csv:
+        spec.setdefault("deliverables", {})["csv"] = str(Path(deliverables_csv).resolve())
+    if row is not None:
+        spec.setdefault("deliverables", {})["row"] = str(row)
+    for sec in JOB_SECTIONS:
+        if sec in spec:
+            try:
+                spec[sec] = substitute(spec[sec], spec)
+            except MissingSpecKey as e:
+                e.where = f"`{sec}:` section of the spec sheet or job file"
+                raise
+    return spec, inputs
 
 
 def _check_layout_shape(timing: dict) -> None:
@@ -137,7 +286,7 @@ def lookup(spec: dict, ref: str):
         elif isinstance(cur, list) and part.isdigit() and int(part) < len(cur):
             cur = cur[int(part)]
         else:
-            raise ConfigError(f"missing spec key ${{{ref}}} (no '{'.'.join(parts[:i + 1])}')")
+            raise MissingSpecKey(ref.strip(), ".".join(parts[1:]), ".".join(parts[1:i + 1]))
     return copy.deepcopy(cur)
 
 
@@ -161,6 +310,30 @@ def substitute(obj, spec: dict):
     return obj
 
 
+def is_disabled(cfg) -> bool:
+    return isinstance(cfg, dict) and cfg.get("enabled", True) is False
+
+
 def resolve_profile(name_or_path: str, spec: dict) -> tuple[dict, list[str]]:
+    """Merged profile with ${spec.*} substituted. Lazy for checks with `enabled: false`: their
+    entries keep the refs verbatim (never looked up, so a spec without e.g. an audio section
+    loads a profile whose audio checks are switched off). Enabled checks: a missing key is a
+    ConfigError (D4)."""
     merged, shas = load_profile_raw(name_or_path)
-    return substitute(merged, spec), shas
+    out = {}
+    for k, v in merged.items():
+        if k == "checks":
+            out[k] = {}
+            for cid, cfg in (v or {}).items():
+                try:
+                    out[k][cid] = copy.deepcopy(cfg) if is_disabled(cfg) else substitute(cfg, spec)
+                except MissingSpecKey as e:
+                    e.where = f"profile check {cid} (profile {merged.get('name')!r})"
+                    raise
+        else:
+            try:
+                out[k] = substitute(v, spec)
+            except MissingSpecKey as e:
+                e.where = f"profile key {k!r} (profile {merged.get('name')!r})"
+                raise
+    return out, shas

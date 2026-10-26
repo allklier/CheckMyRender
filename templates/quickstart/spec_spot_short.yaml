@@ -1,0 +1,41 @@
+# =====================================================================================
+# SPEC SHEET - quick start (technical part of the demo spot; job data lives in job.yaml)
+# =====================================================================================
+# Matches the demo spot from `tests/slate/make_spot.py OUTDIR --short`: 1920x1080 ProRes
+# 422 HQ, 29.97 fps, 5 s slate + 2 s black, a 3 s program from 01:00:00:00, no tail, one
+# stereo 48 kHz 24-bit audio stream. For a real :30 spot set program_duration_frames: 900.
+# Every field is explained in templates/slate/spec_spot_slated.yaml and the user guide.
+# =====================================================================================
+spec_version: 1
+video:
+  container: mov
+  codec: prores
+  codec_profile: "422 HQ"
+  width: 1920
+  height: 1080
+  fps: "30000/1001"                  # 29.97 exact
+  scan: progressive
+  pixel_format: yuv422p10le
+  color: {primaries: bt709, transfer: bt709, matrix: bt709, range: tv}
+  aspect_ratio: "16:9"
+  pixel_aspect: 1.0
+timing:
+  timecode_mode: non-drop
+  program_start_timecode: "01:00:00:00"
+  program_duration_frames: 90        # the demo spot is 3 s (:30 would be 900 frames)
+  head_layout:                       # 5 s slate, 2 s black, content from file frame 210
+    - {type: slate, frames: 150}
+    - {type: black, frames: 60}
+    - {type: program}
+  tail_layout: []                    # no tail black, no extra frames
+audio:
+  sample_rate: 48000
+  bit_depth: 24
+  codec: pcm_s24le
+  tracks:
+    - {index: 0, layout: stereo, content: "Stereo mix L/R"}
+  loudness:
+    standard: "ATSC A/85"
+    program_track: 0
+content:
+  captions: {required: false}

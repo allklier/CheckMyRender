@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "tesseract $*" >>"$FAKE_CALLS"
+case $1 in --version) echo "tesseract 5.5.2";; --list-langs) printf 'List of available languages in "x" (2):\neng\nosd\n';; esac

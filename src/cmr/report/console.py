@@ -54,11 +54,14 @@ def render(report: dict, verbose: bool = False) -> str:
     s = report["summary"]
     counts = ", ".join(f"{k} {v}" for k, v in s["counts"].items() if v)
     sup = f" ({s['suppressed']} not listed but counted; --max-findings 0 lists all)" if s.get("suppressed") else ""
+    if s.get("job_id"):
+        lines.append(f"JOB {s['job_id']}")
     lines.append(f"RESULT {s['worst']} (exit {s['exit_code']}): {counts}{sup}")
     wv = report.get("waivers")
     if wv:
+        keys = ("applied", "content_changed", "stale", "expired") + (("foreign",) if wv.get("foreign") else ())
         lines.append(f"WAIVERS {wv['file']}: " + ", ".join(
-            f"{k.replace('_', ' ')} {len(wv[k])}" for k in ("applied", "content_changed", "stale", "expired")))
+            f"{k.replace('_', ' ')} {len(wv[k])}" for k in keys))
         for w in wv["applied"]:
             if w.get("type") == "category":
                 lines.append(f"  category {w['id']} {scope(w)}: {w['count']} finding(s) waived: {w['reason']}")
@@ -69,4 +72,6 @@ def render(report: dict, verbose: bool = False) -> str:
                 else:
                     lines.append(f"  {k}: {w['id']} {w['check_id']} @ {w['timecode_start']}-"
                                  f"{w['timecode_end']} (frames {w['frame_start']}-{w['frame_end']}): {w['reason']}")
+        for w in wv.get("foreign", []):
+            lines.append(f"  foreign (job {w['job']}, not applied): {w['id']} {w['check_id']}: {w['reason']}")
     return "\n".join(lines) + "\n"

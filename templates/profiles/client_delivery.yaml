@@ -1,0 +1,52 @@
+# =====================================================================================
+# PROFILE TEMPLATE - final delivery (masters and spots going to the client/broadcaster)
+# =====================================================================================
+# Starts from the stock `release` profile (profiles/release.yaml), which already:
+#   - runs every picture check on EVERY frame (quality: high),
+#   - allows black runs and silences of at most 6 frames inside the program,
+#   - uses EBU R128 -23 LUFS +-0.5 LU / -1 dBTP and ATSC A/85 -24 LKFS +-2 LU / -2 dBTP,
+#   - fails on blanking defects and missing required captions.
+# The spec sheet picks the loudness standard; the numbers are set here.
+#
+# Use:
+#   cmr check MASTER.mov --profile profiles/client_delivery.yaml --spec SPEC.yaml \
+#       --report json -o reports/
+# =====================================================================================
+profile_version: 1
+name: client_delivery
+extends: release
+description: House delivery - release rules with the house loudness numbers and limits.
+checks:
+  audio.loudness:
+    # One entry per standard name a spec may use. Change the numbers to the delivery
+    # document you work to. Names must match the spec's audio.loudness.standard exactly.
+    standards:
+      "EBU R128": {target_lufs: -23, tolerance_lu: 0.5, true_peak_max_dbtp: -1}
+      "ATSC A/85": {target_lufs: -24, tolerance_lu: 2, true_peak_max_dbtp: -2}
+      # Example of a house/platform variant (a spec then says standard: "ATSC A/85 tight"):
+      "ATSC A/85 tight": {target_lufs: -24, tolerance_lu: 1, true_peak_max_dbtp: -2}
+    # lra_max_lu: 20                 # optional: loudness range limit in LU
+
+  video.blanking:
+    # Head/tail segments the blanking check ignores. Default is [slate, bars_tone, two_pop]
+    # (colour bars and 2-pop cards have black areas at the frame edge by design).
+    exclude_segments: [slate, bars_tone, two_pop]
+    dark_edge_mode: flag             # dark picture at an edge: flag | info | hide (see guide)
+
+  audio.silent_channel:
+    # Some channel maps REQUIRE silent channels (e.g. stereo on 1-2, 3-6 empty):
+    # declare them in the spec (audio.allowed_silence); they are then INFO, not a failure.
+    severity: fail
+
+  audio.clipping:
+    clip_dbfs: -0.1                  # sample peak at or above this = clipped frame
+
+  video.black_runs:
+    max_black_run_frames: 6
+    max_findings: 25                 # long form: act breaks give more legitimate runs to review
+
+# Waiver matching tolerances (used with `cmr check --waivers FILE`). Defaults shown.
+waivers:
+  video_max_bits: 10                 # how different a waived picture may look (0-64)
+  audio_max_db: 2.0                  # how much a waived sound may change in level (dB)
+  margin_frames: 5                   # how far a finding may sit outside the waived range

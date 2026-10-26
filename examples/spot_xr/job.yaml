@@ -1,0 +1,28 @@
+# Job file (D31: the entry point of a job; `cmr check FILE` in this folder needs no other
+# options). Fictional job. Job sections (job, deliverables, slate) are merged into the spec.
+# Blank value = not specified = not checked; "<empty>" = the slate field must be empty.
+# `${spec.*}` refs are resolved when loading; `{row.*}`, `{file.*}`, `{job.*}` per file.
+# Paths are relative to this file; command-line options override them.
+job_version: 1
+spec: spec_spot_xr.yaml             # technical spec sheet
+profile: spot_review                # stock profile name or path (spot_render / spot_delivery)
+waivers: waivers.yaml               # written by `cmr waive` run in this folder
+output: reports                     # JSON report folder (cmr_report_latest.json)
+job:
+  id: nw_sb_league                  # short job id: stamped on waivers, in reports and the log
+  agency: Northwind Advertising
+  client: Sample Burgers
+  product: "<empty>"
+  artist: Alex Example
+  uses_ad_id: true
+  # D20 + D27: expected filename built from the selected CSV row (+ the profile tag `resolution`)
+  naming_pattern: "{row.title}_{row.length}_{row.ad_id}_{resolution}_{file.variant}.mov"
+deliverables:
+  csv: deliverables.csv             # one row per SPOT (no filenames); relative to this file
+  columns: {ad_id: "Ad-ID", title: "Title", length: "Length", version: "Version"}
+  key: ad_id                        # Ad-ID: compared without a trailing H/D
+  match: both                       # key selects the row, the filename check verifies the name
+  filename_regex: '(?P<title>.+)_(?P<length>\d+)_(?P<ad_id>[A-Z0-9]{11}[HD]?)_(?P<resolution>\d+x\d+)_(?P<variant>Slated|Unslated)\.mov'
+slate:
+  template: slates/xr_standard.yaml
+  # expect: {MISC: "edit-bay-03"}   # per-field override of the template expectations

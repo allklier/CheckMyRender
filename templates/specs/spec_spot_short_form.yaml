@@ -1,0 +1,63 @@
+# =====================================================================================
+# SPEC SHEET TEMPLATE - ad spot, short form (:30 at 29.97, slate + black head)
+# =====================================================================================
+# Facts of one commercial spot. The layout below follows a common short-form ad
+# delivery pattern: 5 s slate, 2 s black, content from file frame 210, no tail black and
+# no extra frames after the last frame of content. Values are an EXAMPLE: take the real
+# numbers from the ad-delivery platform's or broadcaster's current spec document.
+#
+# Use with:  --profile release   (or your copy of templates/profiles/client_delivery.yaml)
+# Slate CONTENT checks (reading the slate text) are in development: see
+# templates/slate/ and the user guide section "Slate checks".
+#
+# Spot lengths are counted in TIMECODE frames: :30 at 29.97 = 30 x 30 = 900 frames,
+# :15 = 450, :60 = 1800. At 23.976: :30 = 30 x 24 = 720.
+# =====================================================================================
+spec_version: 1
+
+job:
+  title: "Example Spot"              # EDIT
+  title_code: "EXSPOT"               # EDIT: filename-safe
+  episode: "30S"                     # EDIT: length or spot code used in the filename
+  version: "v01"                     # EDIT
+  client: "Example Brand"            # EDIT (informational)
+  # Spots are often named after the Ad-ID or a house code; spell the name out when you know it:
+  # filename: "EXSPOT_30S_HD_2997_ST_v01.mov"
+  naming_pattern: "{title_code}_{episode}_{format}_{fps_tag}_{audio_tag}_{version}.mov"
+
+video:
+  container: mov
+  codec: prores
+  codec_profile: "422 HQ"
+  width: 1920
+  height: 1080
+  fps: "30000/1001"                  # 29.97, exact fraction in quotes
+  scan: progressive
+  pixel_format: yuv422p10le
+  color: {primaries: bt709, transfer: bt709, matrix: bt709, range: tv}
+  aspect_ratio: "16:9"
+  pixel_aspect: 1.0
+
+timing:
+  timecode_mode: non-drop            # EDIT: many spot specs use NDF; some ask for DF
+  program_start_timecode: "01:00:00:00"
+  # file starts 210 frames earlier: 00:59:53:00 (derived, no need to write it)
+  program_duration_frames: 900       # EDIT: :30 = 900 frames at 29.97. Exact - tolerance is 0
+  head_layout:
+    - {type: slate, frames: 150}     # 5 s slate
+    - {type: black, frames: 60}      # 2 s black
+    - {type: program}                # content starts at file frame 210
+  tail_layout: []                    # no tail black, no extra frames
+
+audio:
+  codec: pcm_s24le
+  sample_rate: 48000
+  bit_depth: 24
+  tracks:
+    - {index: 0, layout: stereo, content: "Stereo mix L/R"}
+  loudness:
+    standard: "ATSC A/85"            # -24 LKFS; the numbers live in the profile
+    program_track: 0
+
+content:
+  captions: {required: false, formats: [embedded_608]}  # EDIT: true if the spot must carry 608 captions

@@ -8,6 +8,8 @@ QUALITIES = ["fast", "high"]   # per-check `quality`; default high
 
 SEGMENT_TYPES = ["slate", "black", "bars_tone", "two_pop", "program"]
 
+_opt_int = {"type": ["integer", "null"], "minimum": 1}   # minimum applies to integers only
+
 SPEC_SCHEMA = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -18,21 +20,21 @@ SPEC_SCHEMA = {
             "filename": {"type": "string"},
             "naming_pattern": {"type": "string"}}},
         "video": {"type": "object", "properties": {
-            "width": {"type": "integer", "minimum": 1},
-            "height": {"type": "integer", "minimum": 1},
+            "width": _opt_int,          # null = not specified, not checked (also below)
+            "height": _opt_int,
             "fps": {"type": ["string", "integer"]},   # rational string, never a float
             "scan": {"enum": ["progressive", "interlaced"]},
             "color": {"type": "object"}}},
         "timing": {"type": "object", "properties": {
             "timecode_mode": {"enum": ["non-drop", "drop"]},
-            "file_start_timecode": {"type": "string"},
-            "program_start_timecode": {"type": "string"},
-            "program_duration_frames": {"type": "integer", "minimum": 1},
+            "file_start_timecode": {"type": ["string", "null"]},
+            "program_start_timecode": {"type": ["string", "null"]},
+            "program_duration_frames": _opt_int,
             "head_layout": {"type": "array", "items": {"$ref": "#/$defs/segment"}},
             "tail_layout": {"type": "array", "items": {"$ref": "#/$defs/segment"}}}},
         "audio": {"type": "object", "properties": {
-            "sample_rate": {"type": "integer"},
-            "bit_depth": {"type": "integer"},
+            "sample_rate": _opt_int,
+            "bit_depth": _opt_int,
             "tracks": {"type": "array", "items": {
                 "type": "object", "required": ["index", "layout"],
                 "properties": {"index": {"type": "integer", "minimum": 0},
@@ -44,6 +46,48 @@ SPEC_SCHEMA = {
         "properties": {"type": {"enum": SEGMENT_TYPES},
                        "frames": {"type": "integer", "minimum": 1}},
         "additionalProperties": False}},
+}
+
+# Job file (D27): the job-level part of the spec, merged into the one spec by `cmr check --job`.
+# Blank values mean "not specified" (not checked); "<empty>" means "must be empty".
+JOB_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["job_version"],
+    "additionalProperties": False,
+    "properties": {
+        "job_version": {"const": 1},
+        # D31: the job file as the entry point. job.id = short job id (waivers, reports); the
+        # file names its spec sheet, profile (stock name or path), waiver file and report
+        # folder; relative paths resolve from the job file's folder; CLI options override.
+        "job": {"type": "object", "properties": {"id": {"$ref": "#/$defs/job_id"}}},
+        "spec": {"type": "string", "minLength": 1},
+        "profile": {"type": "string", "minLength": 1},
+        "waivers": {"type": "string", "minLength": 1},
+        "output": {"type": "string", "minLength": 1},
+        "deliverables": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "csv": {"type": "string"},
+                "columns": {"type": "object", "additionalProperties": {"type": "string"}},
+                # one column, or a composite key (list of columns = filename groups); D27
+                "key": {"oneOf": [{"type": "string"},
+                                  {"type": "array", "minItems": 1, "items": {"type": "string"}}]},
+                "key_type": {"oneOf": [{"enum": ["ad_id", "text", "duration"]},
+                                       {"type": "object", "additionalProperties":
+                                        {"enum": ["ad_id", "text", "duration"]}}]},
+                "match": {"enum": ["key", "generated_name", "both", "fields"]},
+                "filename_regex": {"type": "string"},
+                "match_fields": {"type": "array", "items": {"type": "string"}},
+                "row": {"type": "string"}}},
+        "slate": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "template": {"type": "string"},
+                "expect": {"type": "object"}}},
+    },
+    # letters, digits, `_`, `-`, `.`; "*" is reserved for cross-job waivers
+    "$defs": {"job_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"}},
 }
 
 PROFILE_SCHEMA = {
@@ -124,7 +168,11 @@ REPORT_SCHEMA = {
         # 1.1 (additive): finding.waiver, counts.WAIVED, waivers
         # 1.2 (additive): files[].suppressed, files[].waived_by_category, summary.max_findings /
         #     check_limits / suppressed / waived_by_category (counts stay complete)
-        "schema_version": {"const": "1.2"},
+        # 1.3 (additive): summary.mode (run mode, D26) and summary.quality (`cmr check --quality`
+        #     fast|high, or "profile" when not given; per-finding `quality` is the mode used)
+        # 1.4 (additive): summary.job_id (job.yaml `job.id`, D31, null without one) and
+        #     waivers.foreign (waivers of another job, skipped)
+        "schema_version": {"const": "1.4"},
         "tool": {"type": "object", "required": ["name", "version", "ffmpeg"]},
         "profile": {"type": "object", "required": ["name", "sha256"]},
         "spec": {"type": "object", "required": ["path", "sha256"]},
@@ -138,13 +186,32 @@ REPORT_SCHEMA = {
                                                   "items": WAIVED_BY_CATEGORY_SCHEMA}}}},
         "summary": {"type": "object",
                     "required": ["worst", "exit_code", "counts", "max_findings", "check_limits",
-                                 "suppressed", "waived_by_category"],
+                                 "suppressed", "waived_by_category", "mode", "quality",
+                                 "job_id"],
                     "properties": {
+                        "job_id": {"type": ["string", "null"]},
+                        "mode": {"enum": ["foreground", "background", None]},
+                        "quality": {"enum": QUALITIES + ["profile"]},
                         "max_findings": {"type": "integer", "minimum": 0},
                         "check_limits": _counts,
                         "suppressed": {"type": "integer", "minimum": 0},
                         "waived_by_category": {"type": "integer", "minimum": 0}}},
         "waivers": {"type": "object",   # present only with `cmr check --waivers FILE`
-                    "required": ["file", "applied", "content_changed", "stale", "expired"]},
+                    "required": ["file", "applied", "content_changed", "stale", "expired",
+                                 "foreign"]},
     },
 }
+
+# --- check params (profile check entries minus the reserved keys) ---------------------------
+# Built with `check_params`: additionalProperties false, so a misspelt param is a config error
+# naming the key (engine.validate_profile_params, `cmr check` / `cmr profiles show`, exit 3).
+# Values from `${spec.*}` refs may be null (= not specified, not checked).
+SEV_PARAM = _sev_in
+OPT_STR = {"type": ["string", "null"]}
+OPT_INT = {"type": ["integer", "null"]}
+OPT_OBJ = {"type": ["object", "null"]}
+
+
+def check_params(required=(), **props) -> dict:
+    return {"type": "object", "additionalProperties": False, "required": list(required),
+            "properties": props}

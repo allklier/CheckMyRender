@@ -1,0 +1,48 @@
+# =====================================================================================
+# SPEC SHEET TEMPLATE - colour / comp interim render, log or graded, NO audio
+# =====================================================================================
+# Picture-only renders handed on to the next step (grade -> online, comp -> conform,
+# log plates back to VFX). No slate, no head or tail, no audio, no captions.
+#
+# Use ONLY with:  --profile templates/profiles/client_colour_interim.yaml  (or your copy)
+# That profile switches the audio checks off and does not ask this spec for audio values.
+# The stock profiles (final, release, review, colour_interim, log_interim) expect
+# audio.codec / sample_rate / bit_depth / loudness in the spec and stop with
+# "missing spec key ${spec.audio.codec}" on this file.
+# =====================================================================================
+spec_version: 1
+
+job:
+  title: "Example Feature"           # EDIT
+  title_code: "EXFEAT"               # EDIT
+  # Interim names are free-form; the profile switches the filename check off.
+  naming_pattern: "{title_code}.mov"
+
+video:
+  container: mov
+  codec: prores
+  codec_profile: "4444"              # EDIT: "4444" / "4444 XQ" / "422 HQ" as agreed for the hand-off
+  width: 1920                        # EDIT: e.g. 3840 x 2160 for UHD
+  height: 1080
+  fps: "24000/1001"
+  scan: progressive
+  pixel_format: yuv444p12le          # EDIT: ProRes 4444 decodes as yuv444p12le (or yuva444p12le with alpha);
+                                     # run `cmr probe` on a known-good render to copy the exact word
+  # Log renders are usually TAGGED bt709 even though the picture is log; put here what the
+  # file is expected to SAY. The profile reports colour tags as information only.
+  color: {primaries: bt709, transfer: bt709, matrix: bt709, range: tv}
+  aspect_ratio: "16:9"
+  pixel_aspect: 1.0
+
+timing:
+  timecode_mode: non-drop
+  program_start_timecode: "01:00:00:00"   # EDIT: or the source timecode of the shot/reel
+  program_duration_frames: 240       # EDIT: frames of the shot/reel (informational in the profile)
+  head_layout: []                    # no slate, no head: the program starts at file frame 0
+  tail_layout: []
+
+audio:
+  tracks: []                         # no audio streams expected; an audio stream is reported
+
+content:
+  captions: {required: false}

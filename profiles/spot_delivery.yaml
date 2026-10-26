@@ -1,0 +1,33 @@
+# Spot delivery to Extreme Reach (D27): strict. Everything at quality high and FAIL.
+# XR short-form rules this relies on (from the spec + this profile): ATSC A/85 -24 LKFS, true
+# peak <= -2 dBTP, slate 5 s + black 2 s before content (spec head_layout, timing.layout),
+# no tail black / no extra frames (spec tail_layout [] + timing.frame_count tolerance 0).
+# Waivers (D17) apply as usual (`cmr check --waivers`). DATE stays WARN (file dates are
+# unreliable after copies); uncertain OCR reads stay WARN (check by eye, not a content error).
+profile_version: 1
+name: spot_delivery
+extends: spot_review
+description: Spot delivery (Extreme Reach) - strict, every check at quality high and FAIL.
+checks:
+  video.blanking:
+    quality: high
+    severity: fail
+    dark_edge_mode: flag
+  video.black_runs:
+    quality: high
+  timing.frame_count:
+    tolerance_frames: 0
+  audio.loudness:
+    severity: fail
+    standards:
+      "ATSC A/85": {target_lufs: -24, tolerance_lu: 2, true_peak_max_dbtp: -2}
+  slate.present: {quality: high}
+  slate.consistency: {quality: high}
+  slate.content:
+    quality: high
+    severity: fail
+    field_severity: {}
+  slate.claims: {quality: high}
+  slate.bars:
+    quality: high
+    severity: fail

@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from ..engine import Check, Skip, register
 from ..timecode import TimecodeError, frames_to_tc, tc_to_frames
+from ..schemas import OPT_OBJ, check_params
 
 
 @register
 class ProgramFrameCount(Check):
     id = "timing.frame_count"
+    params_schema = check_params(timing=OPT_OBJ, tolerance_frames={"type": "integer", "minimum": 0})
 
     def evaluate(self, ctx, candidates):
         tl, timing = ctx.timeline, ctx.params.get("timing") or {}
@@ -39,6 +41,7 @@ class Layout(Check):
     """Head/tail layout positions: layout must fit in the file, and the first program
     frame must land on program_start_timecode."""
     id = "timing.layout"
+    params_schema = check_params(timing=OPT_OBJ)
 
     def evaluate(self, ctx, candidates):
         tl, timing = ctx.timeline, ctx.params.get("timing") or {}
@@ -71,13 +74,16 @@ class Layout(Check):
 @register
 class TimecodeStart(Check):
     """Embedded start timecode vs spec file_start_timecode (or, if absent, derived as
-    program_start_timecode - head frames). Also checks the DF/NDF mode."""
+    program_start_timecode - head frames). Also checks the DF/NDF mode (';' = drop).
+    Source (media.timecode_source): a stream `timecode` tag (MOV tmcd/video), else the
+    format tag (MXF material package)."""
     id = "timing.timecode_start"
+    params_schema = check_params(timing=OPT_OBJ)
 
     def evaluate(self, ctx, candidates):
         tl, timing, media = ctx.timeline, ctx.params.get("timing") or {}, ctx.media
         if media.timecode is None:
-            return [ctx.finding("no embedded timecode (no tmcd track / timecode tag)")]
+            return [ctx.finding("no embedded timecode (no tmcd track, stream or MXF format timecode tag)")]
         out = []
         want_drop = timing.get("timecode_mode", "non-drop") == "drop"
         if tl.drop != want_drop:
@@ -97,7 +103,8 @@ class TimecodeStart(Check):
             return out + [ctx.finding(f"bad spec timecode: {e}")]
         if exp != tl.start_frame:
             exp_tc = frames_to_tc(exp, tl.fps, tl.drop)
-            out.append(ctx.finding(f"start timecode: expected {exp_tc} ({how}), got {media.timecode} "
+            src = f" from {media.timecode_source}" if media.timecode_source else ""
+            out.append(ctx.finding(f"start timecode: expected {exp_tc} ({how}), got {media.timecode}{src} "
                                    f"(off by {tl.start_frame - exp:+d} frames)",
                                    expected=exp_tc, actual=media.timecode, frame_start=0, frame_end=0))
         return out

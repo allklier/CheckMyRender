@@ -5,11 +5,13 @@ missing frame."""
 from __future__ import annotations
 
 from ..engine import Check, register
+from ..schemas import check_params
 
 
 @register
 class DecodeErrors(Check):
     id = "decode.errors"
+    params_schema = check_params(max_lines={"type": "integer", "minimum": 0})
     needs = frozenset({"probe", "decode"})
 
     def evaluate(self, ctx, candidates):

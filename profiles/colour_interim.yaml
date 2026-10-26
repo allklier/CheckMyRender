@@ -1,0 +1,45 @@
+# Colour / comp INTERIM renders: graded or comped picture handed on for review or the next step.
+# Typically no slate, no head/tail, no audio, no captions; timecode is 01:00:00:00 or the source TC.
+# Gates the technical settings (codec, size, fps, pixel format, colour tags) and sharp blanking
+# defects (the typical reposition/scale error); timing, naming and black runs are information only.
+profile_version: 1
+name: colour_interim
+extends: review
+description: Colour/comp interim renders - settings and sharp blanking gate; timing and naming are info, audio is not checked.
+checks:
+  filename:
+    enabled: false               # interim names are free-form
+  captions.presence:
+    enabled: false
+  timing.frame_count:
+    severity: info               # interim length follows the edit, not a delivery spec
+  timing.layout:
+    severity: info
+  timing.timecode_start:
+    severity: info               # source TC is legitimate on interims
+  video.black_runs:
+    severity: info               # fades to/from black are normal in a cut
+  video.blanking:
+    severity: fail               # sharp `edge` defects gate (review lowers them to warn)
+    dark_edge_mode: info
+  audio.loudness:
+    enabled: false               # interims carry no final mix
+  # Picture only: every audio check is off, so a spec without an audio section loads (checks
+  # with enabled: false are not substituted; format/layout/silence/silent_channel read
+  # ${spec.audio...}). To gate an unexpected audio stream, extend this profile with
+  # `audio.layout: {enabled: true}` and give the spec `audio: {tracks: []}`.
+  audio.format:
+    enabled: false
+  audio.layout:
+    enabled: false
+  audio.silence:
+    enabled: false
+    severity: info               # (when re-enabled)
+  audio.silent_channel:
+    enabled: false
+    severity: info
+  audio.clipping:
+    enabled: false
+  video.color:
+    severity: warn               # wrong primaries/transfer/matrix tags warn on interims
+    key_severity: {range: warn}  # range mismatch (e.g. full-range encode): warn
