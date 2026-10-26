@@ -1,0 +1,400 @@
+"""Waivers v1 (D17): reviewed findings that are not re-flagged unless the evidence changed.
+
+A waiver = check id + stream (+ edge/kind/channel from the finding evidence) + frame range +
+a PERCEPTUAL fingerprint of the evidence, computed after the main pass by seeking to a
+bounded number of evenly spaced frames of the range (first and last included):
+- video: dHash, 64 bits per frame (grayscale 9x8 area downscale, bit = left > right
+  neighbour). Distance = max Hamming distance over the sampled frames.
+- audio: per sampled frame and channel, sample peak and RMS in dBFS (0.1 dB, floor -90).
+  Distance = max absolute dB difference. Why: the audio checks judge levels (clipping,
+  silence, dead channel, true peak), so a level envelope is what must stay the same;
+  it survives re-encodes and resampling-free re-renders, a remix or gain change shows.
+  A change of timbre at the same level is not seen.
+Matching (same location only; moved content = roadmap): a finding of the same check, stream
+and locator whose range lies inside the waiver range +- margin is fingerprinted at the
+WAIVER's frames; distance <= tolerance -> WAIVED (severity lowered to PASS, raw_severity
+kept, waiver_ref set); otherwise it stays flagged with a "content changed" note.
+Category waivers (`type: category`, waiver file version 2): a blanket decision for a check
+class, NO fingerprint: check id [+ evidence kind] [+ edge | channel] [+ frame range], waives
+findings whose RAW severity is <= the required `max_severity` ceiling (info|warn|fail).
+Applied after the per-finding waivers, only to findings those did not waive.
+Contract and verified facts: src/cmr/CLAUDE.md.
+"""
+from __future__ import annotations
+
+import datetime
+import math
+import subprocess
+from array import array
+from fractions import Fraction
+from pathlib import Path
+from typing import Callable
+
+import yaml
+
+from .config import ConfigError
+from .media import probe
+from .model import Finding, Severity
+
+WAIVER_VERSION = 2          # 2 adds category waivers; files without them are still written as 1
+READ_VERSIONS = (1, 2)
+CEILINGS = ("info", "warn", "fail")    # category waiver max_severity
+EDGES = ("top", "bottom", "left", "right")
+DEFAULTS = {"video_max_bits": 10, "audio_max_db": 2.0, "margin_frames": 5}
+VIDEO_SAMPLES, AUDIO_SAMPLES = 8, 16
+FLOOR_DB = -90.0
+LOCATOR_KEYS = ("edge", "kind", "channel")     # evidence keys that are part of the location
+ALGO = {"video": ("video_dhash", "dhash64-gray9x8-area", 1),
+        "audio": ("audio_envelope", "peak-rms-dbfs-0.1db", 1)}
+
+
+class FingerprintError(RuntimeError):
+    pass
+
+
+def media_kind(check_id: str) -> str | None:
+    return "video" if check_id.startswith("video.") else (
+        "audio" if check_id.startswith("audio.") else None)
+
+
+def waivable(fd: dict) -> bool:
+    """Findings with a frame range from a video/audio content check, INFO..FAIL, not waived."""
+    return (media_kind(fd["check_id"]) is not None and fd.get("frame_start") is not None
+            and fd.get("stream") is not None and not fd.get("waiver_ref")
+            and fd["severity"] in ("INFO", "WARN", "FAIL"))
+
+
+def locator(evidence: list | None) -> dict:
+    ev = (evidence or [{}])[0] if evidence else {}
+    return {k: ev[k] for k in LOCATOR_KEYS if isinstance(ev, dict) and k in ev}
+
+
+def sample_frames(a: int, b: int, n: int) -> list[int]:
+    if b - a + 1 <= n:
+        return list(range(a, b + 1))
+    return sorted({a + round(i * (b - a) / (n - 1)) for i in range(n)})
+
+
+# --- fingerprints ---------------------------------------------------------------------
+def dhash(px: bytes, w: int = 9, h: int = 8) -> str:
+    v = 0
+    for r in range(h):
+        for c in range(w - 1):
+            v = (v << 1) | (px[r * w + c] > px[r * w + c + 1])
+    return f"{v:016x}"
+
+
+def _db(x: float) -> float:
+    return FLOOR_DB if x <= 0 else max(FLOOR_DB, round(20 * math.log10(x), 1))
+
+
+def _ffmpeg(ffmpeg: str, args: list[str]) -> bytes:
+    p = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-v", "error", *args],
+                       capture_output=True, timeout=120)
+    if p.returncode != 0:
+        raise FingerprintError(p.stderr.decode(errors="replace").strip() or "ffmpeg failed")
+    return p.stdout
+
+
+class Fingerprinter:
+    """Fingerprints one media file at given frames (one seek + short decode per frame)."""
+
+    def __init__(self, path, fps: Fraction | str, ffmpeg: str = "ffmpeg", ffprobe: str = "ffprobe"):
+        self.path, self.fps = Path(path), Fraction(fps)
+        self.ffmpeg, self.ffprobe, self._media = ffmpeg, ffprobe, None
+
+    def _channels(self, stream: int) -> int:
+        if self._media is None:
+            self._media = probe(self.path, self.ffprobe)
+        for s in self._media.audio:
+            if s["index"] == stream and s.get("channels"):
+                return int(s["channels"])
+        raise FingerprintError(f"stream {stream} is not an audio stream with channels")
+
+    def video_frame(self, stream: int, frame: int) -> str:
+        # seek half a frame early: accurate seek drops frames before -ss, so frame `frame` is
+        # the first one out (verified against a full decode, src/cmr/CLAUDE.md)
+        t = max(Fraction(0), (frame - Fraction(1, 2)) / self.fps)
+        px = _ffmpeg(self.ffmpeg, ["-ss", f"{float(t):.6f}", "-i", str(self.path),
+                                   "-map", f"0:{stream}", "-frames:v", "1",
+                                   "-vf", "scale=9:8:flags=area+accurate_rnd,format=gray",
+                                   "-f", "rawvideo", "-"])
+        if len(px) != 72:
+            raise FingerprintError(f"frame {frame}: got {len(px)} bytes, expected 72")
+        return dhash(px)
+
+    def audio_frame(self, stream: int, frame: int) -> list[list[float]]:
+        ch = self._channels(stream)
+        raw = _ffmpeg(self.ffmpeg, ["-ss", f"{float(frame / self.fps):.6f}", "-i", str(self.path),
+                                    "-map", f"0:{stream}", "-t", f"{float(1 / self.fps):.6f}",
+                                    "-f", "f32le", "-c:a", "pcm_f32le", "-"])
+        s = array("f")
+        s.frombytes(raw[: len(raw) - len(raw) % (4 * ch)])
+        out = []
+        for c in range(ch):
+            x = s[c::ch]
+            if not x:
+                raise FingerprintError(f"frame {frame}: no audio decoded")
+            out.append([_db(max(abs(v) for v in x)), _db(math.sqrt(sum(v * v for v in x) / len(x)))])
+        return out
+
+    def fingerprint(self, check_id: str, stream: int, frames: list[int]) -> dict:
+        kind = media_kind(check_id)
+        typ, algo, ver = ALGO[kind]
+        fn = self.video_frame if kind == "video" else self.audio_frame
+        return {"type": typ, "algorithm": algo, "version": ver, "frames": list(frames),
+                "values": [fn(stream, f) for f in frames]}
+
+    def for_range(self, check_id: str, stream: int, a: int, b: int) -> dict:
+        n = VIDEO_SAMPLES if media_kind(check_id) == "video" else AUDIO_SAMPLES
+        return self.fingerprint(check_id, stream, sample_frames(a, b, n))
+
+
+def distance(a: dict, b: dict) -> float | None:
+    """None = not comparable (other type/algorithm/version or frames)."""
+    if any(a.get(k) != b.get(k) for k in ("type", "algorithm", "version", "frames")):
+        return None
+    if a["type"] == "video_dhash":
+        return max((bin(int(x, 16) ^ int(y, 16)).count("1") for x, y in zip(a["values"], b["values"])),
+                   default=0)
+    d = 0.0
+    for fa, fb in zip(a["values"], b["values"]):
+        if len(fa) != len(fb):
+            return None
+        for ca, cb in zip(fa, fb):
+            d = max(d, *(abs(p - q) for p, q in zip(ca, cb)))
+    return round(d, 2)
+
+
+# --- waiver file ----------------------------------------------------------------------
+def parse_date(v) -> datetime.date | None:
+    if v in (None, ""):
+        return None
+    try:
+        return v if isinstance(v, datetime.date) else datetime.date.fromisoformat(str(v))
+    except ValueError:
+        raise ConfigError(f"bad date {v!r} (use YYYY-MM-DD)") from None
+
+
+_REQUIRED = ("id", "check_id", "stream", "frame_start", "frame_end", "fingerprint", "reason")
+_REQUIRED_CATEGORY = ("id", "check_id", "max_severity", "reason")
+
+
+def is_category(w: dict) -> bool:
+    return w.get("type") == "category"
+
+
+def _check_category(w: dict) -> str | None:
+    """Problem with a category waiver entry, else None."""
+    if str(w["max_severity"]).lower() not in CEILINGS:
+        return f"max_severity {w['max_severity']!r} (allowed: {', '.join(CEILINGS)})"
+    if media_kind(str(w["check_id"])) is None:
+        return f"check_id {w['check_id']!r}: only video.*/audio.* checks can be waived"
+    if "edge" in w and "channel" in w:
+        return "edge and channel are exclusive"
+    if "edge" in w and w["edge"] not in EDGES:
+        return f"edge {w['edge']!r} (allowed: {', '.join(EDGES)})"
+    a, b = w.get("frame_start"), w.get("frame_end")
+    if (a is None) != (b is None) or (a is not None and not (
+            isinstance(a, int) and isinstance(b, int) and 0 <= a <= b)):
+        return "frame_start/frame_end must both be set, integers, 0 <= start <= end"
+    return None
+
+
+def load(path) -> list[dict]:
+    try:
+        data = yaml.safe_load(Path(path).read_text()) or {}
+    except (OSError, yaml.YAMLError) as e:
+        raise ConfigError(f"waiver file {path}: {e}") from e
+    ws = data.get("waivers") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or (data and data.get("waiver_version") not in READ_VERSIONS) \
+            or not isinstance(ws or [], list):
+        raise ConfigError(f"waiver file {path}: needs waiver_version: "
+                          f"{' or '.join(map(str, READ_VERSIONS))} and a `waivers` list")
+    for i, w in enumerate(ws or []):
+        if not isinstance(w, dict) or w.get("type", "finding") not in ("finding", "category"):
+            raise ConfigError(f"waiver file {path}: entry {i + 1} is not a finding/category waiver")
+        if is_category(w) and data["waiver_version"] < 2:
+            raise ConfigError(f"waiver file {path}: entry {i + 1}: category waivers need "
+                              f"waiver_version: 2")
+        miss = [k for k in (_REQUIRED_CATEGORY if is_category(w) else _REQUIRED) if k not in w]
+        if miss:
+            raise ConfigError(f"waiver file {path}: entry {i + 1} lacks {', '.join(miss)}")
+        bad = _check_category(w) if is_category(w) else None
+        if bad:
+            raise ConfigError(f"waiver file {path}: entry {i + 1}: {bad}")
+        parse_date(w.get("expires"))
+    return ws or []
+
+
+def save(path, waivers: list[dict]) -> None:
+    # version 1 while the file has only per-finding waivers, so older cmr builds still read it
+    ver = WAIVER_VERSION if any(is_category(w) for w in waivers) else 1
+    Path(path).write_text(yaml.safe_dump({"waiver_version": ver, "waivers": waivers},
+                                         sort_keys=False, allow_unicode=True,
+                                         default_flow_style=None))
+
+
+def next_id(waivers: list[dict]) -> str:
+    n = max((int(w["id"][1:]) for w in waivers
+             if str(w["id"])[:1] == "W" and str(w["id"])[1:].isdigit()), default=0)
+    return f"W{n + 1:04d}"
+
+
+def make_waiver(wid: str, fd: dict, fp: dict, reason: str, today: datetime.date,
+                expires: datetime.date | None = None) -> dict:
+    w = {"id": wid, "check_id": fd["check_id"], "stream": fd["stream"],
+         **locator(fd.get("evidence") or (fd.get("candidate") or {}).get("evidence")),
+         "frame_start": fd["frame_start"], "frame_end": fd["frame_end"],
+         "timecode_start": fd.get("timecode_start"), "timecode_end": fd.get("timecode_end"),
+         "message": fd.get("message"), "fingerprint": fp, "reason": reason,
+         "created": today.isoformat()}
+    if expires:
+        w["expires"] = expires.isoformat()
+    return w
+
+
+def make_category(wid: str, check_id: str, max_severity: str, reason: str, today: datetime.date,
+                  kind: str | None = None, edge: str | None = None, channel: int | None = None,
+                  frames: tuple[int, int] | None = None,
+                  expires: datetime.date | None = None) -> dict:
+    """Category waiver (no fingerprint: a blanket decision). Raises ValueError if invalid."""
+    w = {"id": wid, "type": "category", "check_id": check_id}
+    for k, v in (("kind", kind), ("edge", edge), ("channel", channel)):
+        if v is not None:
+            w[k] = v
+    if frames:
+        w["frame_start"], w["frame_end"] = frames
+    w.update(max_severity=str(max_severity).lower(), reason=reason, created=today.isoformat())
+    if expires:
+        w["expires"] = expires.isoformat()
+    bad = _check_category(w)
+    if bad:
+        raise ValueError(bad)
+    return w
+
+
+# --- matching -------------------------------------------------------------------------
+def settings(profile: dict) -> dict:
+    return {**DEFAULTS, **(profile.get("waivers") or {})}
+
+
+def _tolerance(w: dict, s: dict) -> float:
+    return s["video_max_bits"] if media_kind(w["check_id"]) == "video" else s["audio_max_db"]
+
+
+def location_match(f: Finding, w: dict, margin: int) -> bool:
+    if f.check_id != w["check_id"] or f.stream != w["stream"] or f.frame_start is None:
+        return False
+    ev = f.evidence or (f.candidate.evidence if f.candidate else [])
+    loc = locator(ev)
+    if any(loc.get(k) != w.get(k) for k in LOCATOR_KEYS if k in loc or k in w):
+        return False
+    return _in_range(f, ev, w, margin)
+
+
+def _in_range(f: Finding, ev: list, w: dict, margin: int) -> bool:
+    m = max(margin, int((ev[0] if ev else {}).get("boundary_uncertainty_frames", 0) or 0))
+    end = f.frame_end if f.frame_end is not None else f.frame_start
+    return w["frame_start"] - m <= f.frame_start and end <= w["frame_end"] + m
+
+
+def category_match(f: Finding, w: dict, margin: int) -> bool:
+    """Same check; a frame range (content finding, as D17: metadata findings are never
+    waived); RAW severity INFO..max_severity; evidence kind / edge equal when the waiver
+    sets them; channel equal to evidence `channel` or one of `channels`; with a frame range,
+    the finding range inside it (+- margin, as per-finding waivers)."""
+    if f.check_id != w["check_id"] or f.frame_start is None or not (
+            Severity.INFO <= f.raw_severity <= Severity.parse(w["max_severity"])):
+        return False
+    ev = f.evidence or (f.candidate.evidence if f.candidate else [])
+    e0 = ev[0] if ev and isinstance(ev[0], dict) else {}
+    if any(k in w and e0.get(k) != w[k] for k in ("kind", "edge")):
+        return False
+    if "channel" in w and not (e0.get("channel") == w["channel"]
+                               or w["channel"] in (e0.get("channels") or [])):
+        return False
+    return "frame_start" not in w or _in_range(f, ev, w, margin)
+
+
+def _count(state: dict, wid: str) -> None:
+    c = state.setdefault("__counts__", {})
+    c[wid] = c.get(wid, 0) + 1
+
+
+def apply(findings: list[Finding], waivers: list[dict], current: Callable[[dict], dict],
+          s: dict, today: datetime.date, state: dict) -> None:
+    """Mark findings WAIVED / content-changed. `current(w)` fingerprints the checked file at
+    w's frames (only called on a location match). `state[id]` collects 'applied'/'changed'
+    across files for summary(), `state["__counts__"][id]` the number of findings waived.
+    Category waivers run after the per-finding ones, on findings still not waived (also
+    ones a per-finding waiver marked content_changed: the blanket decision covers them)."""
+    active = [w for w in waivers if not (parse_date(w.get("expires")) and parse_date(w["expires"]) < today)]
+    cats = [w for w in active if is_category(w)]
+    active = [w for w in active if not is_category(w)]
+    cache: dict[str, float | None] = {}
+    for f in findings:
+        if f.severity not in (Severity.INFO, Severity.WARN, Severity.FAIL):
+            continue
+        hits = [w for w in active if location_match(f, w, s["margin_frames"])]
+        changed = []
+        for w in hits:
+            if w["id"] not in cache:
+                try:
+                    cache[w["id"]] = distance(w["fingerprint"], current(w))
+                except FingerprintError:
+                    cache[w["id"]] = None
+            d, tol = cache[w["id"]], _tolerance(w, s)
+            if d is not None and d <= tol:
+                state.setdefault(w["id"], set()).add("applied")
+                f.waiver_ref = w["id"]
+                f.waiver = {"id": w["id"], "status": "waived", "reason": w["reason"],
+                            "distance": d, "tolerance": tol}
+                f.lower_to(Severity.PASS)
+                _count(state, w["id"])
+                break
+            state.setdefault(w["id"], set()).add("changed")
+            changed.append((w, d, tol))
+        else:
+            if changed:
+                w, d, tol = changed[0]
+                f.waiver = {"id": w["id"], "status": "content_changed", "reason": w["reason"],
+                            "distance": d, "tolerance": tol,
+                            "note": f"previously waived ({w['id']}), content changed - re-review"}
+    for f in findings:
+        if f.waiver_ref or f.severity not in (Severity.INFO, Severity.WARN, Severity.FAIL):
+            continue
+        for w in cats:
+            if category_match(f, w, s["margin_frames"]):
+                state.setdefault(w["id"], set()).add("applied")
+                _count(state, w["id"])
+                f.waiver_ref = w["id"]
+                f.waiver = {"id": w["id"], "status": "waived", "type": "category",
+                            "reason": w["reason"], "max_severity": w["max_severity"]}
+                f.lower_to(Severity.PASS)
+                break
+
+
+def summary(path, waivers: list[dict], state: dict, today: datetime.date) -> dict:
+    """Waivers by outcome. Every entry has `type` (finding|category) and `count` (findings
+    waived in this run); category entries also their scope (kind/edge/channel/max_severity)."""
+    out = {"file": str(path), "applied": [], "content_changed": [], "stale": [], "expired": []}
+    counts = state.get("__counts__", {})
+    for w in waivers:
+        st = state.get(w["id"], set())
+        if parse_date(w.get("expires")) and parse_date(w["expires"]) < today:
+            key = "expired"
+        elif "applied" in st:
+            key = "applied"
+        elif "changed" in st:
+            key = "content_changed"
+        else:
+            key = "stale"
+        e = {k: w.get(k) for k in ("id", "check_id", "stream", "frame_start",
+                                   "frame_end", "timecode_start", "timecode_end", "reason")}
+        e.update(type=w.get("type", "finding"), count=counts.get(w["id"], 0))
+        if is_category(w):
+            e.update({k: w[k] for k in ("kind", "edge", "channel") if k in w},
+                     max_severity=w["max_severity"])
+        out[key].append(e)
+    return out

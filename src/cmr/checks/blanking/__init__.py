@@ -1,9 +1,9 @@
 """video.blanking: black/non-picture rows or columns at the frame edges.
 
-Plugs into the core single pass (docs/check-interface.md v1.0). Logic and
-tuning knobs live in detector.py; see docs/blanking.md for measurements.
+Plugs into the core single pass (src/cmr/CLAUDE.md v1.0). Logic and
+tuning knobs live in detector.py; see src/cmr/checks/blanking/CLAUDE.md for measurements.
 """
-from cmr.engine import Check, Tap, register
+from cmr.engine import Check, ConfigError, Tap, register
 
 from . import detector
 
@@ -24,12 +24,14 @@ class Blanking(Check):
         "properties": {
             "coverage": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
             "coverage_tolerance": {"type": "number", "minimum": 0, "maximum": 1},
-            "black_luma": _NUM, "matte_luma": _NUM, "min_contrast": _NUM,
+            "black_luma": _NUM, "matte_luma": _NUM, "min_step": _NUM, "min_contrast": _NUM,
             "dark_frame_luma": _NUM,
             "max_depth": {"type": "integer", "minimum": 1},
             "min_run_frames": {"type": "integer", "minimum": 1},
             "persistent_fraction": {"type": "number", "minimum": 0, "maximum": 1},
             "fast_frame_step": {"type": "integer", "minimum": 1},
+            "merge_gap_frames": {"type": "integer", "minimum": 0},
+            "dark_edge_mode": {"enum": list(detector.DARK_EDGE_MODES)},
             "class_severity": {
                 "type": "object", "additionalProperties": False,
                 "properties": {k: _SEV for k in detector.DEFAULTS["class_severity"]},
@@ -44,7 +46,7 @@ class Blanking(Check):
 
     def taps(self, ctx):
         v = ctx.media.video[0]["index"]
-        return [Tap(name, v, chain, detector.KEYS)
+        return [Tap(name, v, chain, detector.tap_keys(name))
                 for name, chain in detector.chains(ctx.params, self._step(ctx)).items()]
 
     def detect(self, ctx, records):
@@ -52,4 +54,8 @@ class Blanking(Check):
                                stream=ctx.media.video[0]["index"], frame_step=self._step(ctx))
 
     def evaluate(self, ctx, candidates):
-        return detector.evaluate(candidates, ctx.params, cap=ctx.severity, check_id=ctx.check_id)
+        try:
+            return detector.evaluate(candidates, ctx.params, cap=ctx.severity,
+                                     check_id=ctx.check_id)
+        except ValueError as e:   # bad dark_edge_mode
+            raise ConfigError(str(e)) from e

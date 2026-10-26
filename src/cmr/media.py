@@ -109,13 +109,36 @@ class MediaInfo:
                      "subtitles": self.subtitles})
 
 
+PROBE_TIMEOUT = 60
+
+
 def ffprobe(path: Path, ffprobe_bin: str = "ffprobe") -> dict:
+    """Streams/format in one call; the first decoded video frames (colour fields) in a second.
+
+    `-show_frames -read_intervals %+#10` WITHOUT `-select_streams v` did not stop after 10 frames
+    on ffmpeg 5.1.10 (Rocky 9): ffprobe ran for 10+ minutes and printed 1.7 GB of JSON for an
+    18 MB test file. With `-select_streams v` it returns in 0.07 s. Observed, root cause not
+    investigated. Every call has a timeout."""
     cmd = [ffprobe_bin, "-v", "error", "-print_format", "json", "-show_format", "-show_streams",
-           "-show_frames", "-read_intervals", "%+#10", str(path)]
-    p = subprocess.run(cmd, capture_output=True, text=True)
+           str(path)]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=PROBE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise ProbeError(f"ffprobe timed out after {PROBE_TIMEOUT}s on {path}")
     if p.returncode != 0:
         raise ProbeError(f"ffprobe failed on {path}: {p.stderr.strip()}")
-    return json.loads(p.stdout)
+    raw = json.loads(p.stdout)
+    fcmd = [ffprobe_bin, "-v", "error", "-print_format", "json", "-select_streams", "v",
+            "-show_frames", "-read_intervals", "%+#10",
+            "-show_entries", "frame=stream_index,color_primaries,color_transfer,color_space,color_range",
+            str(path)]
+    try:
+        fp = subprocess.run(fcmd, capture_output=True, text=True, timeout=PROBE_TIMEOUT)
+        if fp.returncode == 0:
+            raw["frames"] = json.loads(fp.stdout).get("frames", [])
+    except subprocess.TimeoutExpired:
+        pass    # first-frame colour fill is best effort; tags from the stream are still used
+    return raw
 
 
 def from_probe(path: Path, raw: dict) -> MediaInfo:

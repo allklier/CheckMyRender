@@ -11,6 +11,14 @@ def _loc(fd: dict) -> str:
             f"(frames {fd['frame_start']}-{fd['frame_end']})")
 
 
+def scope(w: dict) -> str:
+    """Category waiver scope, e.g. 'video.blanking kind=dark_edge edge=top frames 30-49 <= WARN'."""
+    s = " ".join([w["check_id"]] + [f"{k}={w[k]}" for k in ("kind", "edge", "channel") if w.get(k) is not None])
+    if w.get("frame_start") is not None:
+        s += f" frames {w['frame_start']}-{w['frame_end']}"
+    return f"{s} <= {str(w['max_severity']).upper()}"
+
+
 def render(report: dict, verbose: bool = False) -> str:
     lines = []
     for f in report["files"]:
@@ -19,12 +27,46 @@ def render(report: dict, verbose: bool = False) -> str:
         if tl:
             lines.append(f"        {tl['fps']} fps, {tl['file_frames']} frames, start TC "
                          f"{tl['start_timecode']} ({tl['timecode_source']})")
+        by_check: dict[str, list] = {}
         for fd in f["findings"]:
-            if fd["severity"] == "PASS" and not verbose:
-                continue
-            fast = " [fast mode]" if fd.get("quality") == "fast" else ""
-            lines.append(f"  {fd['severity']:7} {fd['check_id']}{fast}: {fd['message']}{_loc(fd)}")
+            by_check.setdefault(fd["check_id"], []).append(fd)
+        extra = [x["check_id"] for x in f.get("waived_by_category", []) + f.get("suppressed", [])]
+        for cid in list(by_check) + sorted(set(extra) - set(by_check)):
+            for fd in by_check.get(cid, []):
+                w = fd.get("waiver")
+                if fd["severity"] == "PASS" and not fd.get("waiver_ref") and not verbose:
+                    continue   # waived findings are never hidden
+                fast = " [fast mode]" if fd.get("quality") == "fast" else ""
+                sev = "WAIVED" if fd.get("waiver_ref") else fd["severity"]
+                lines.append(f"  {sev:7} {fd['check_id']}{fast}: {fd['message']}{_loc(fd)}")
+                if fd.get("waiver_ref"):
+                    lines.append(f"          was {fd['raw_severity']}; waiver {w['id']}: {w['reason']}")
+                elif w:
+                    lines.append(f"          {w['note']} (reason was: {w['reason']})")
+            for x in f.get("waived_by_category", []):
+                if x["check_id"] == cid:
+                    lines.append(f"  {'WAIVED':7} {cid}: {x['count']} finding(s) by category waiver "
+                                 f"{x['waiver_id']} (worst was {x['worst_raw_severity']}){_loc(x)}")
+            for x in f.get("suppressed", []):
+                if x["check_id"] == cid:
+                    lines.append(f"  ({x['count']} additional {cid} findings suppressed; worst: "
+                                 f"{x['worst_severity']})")
     s = report["summary"]
     counts = ", ".join(f"{k} {v}" for k, v in s["counts"].items() if v)
-    lines.append(f"RESULT {s['worst']} (exit {s['exit_code']}): {counts}")
+    sup = f" ({s['suppressed']} not listed but counted; --max-findings 0 lists all)" if s.get("suppressed") else ""
+    lines.append(f"RESULT {s['worst']} (exit {s['exit_code']}): {counts}{sup}")
+    wv = report.get("waivers")
+    if wv:
+        lines.append(f"WAIVERS {wv['file']}: " + ", ".join(
+            f"{k.replace('_', ' ')} {len(wv[k])}" for k in ("applied", "content_changed", "stale", "expired")))
+        for w in wv["applied"]:
+            if w.get("type") == "category":
+                lines.append(f"  category {w['id']} {scope(w)}: {w['count']} finding(s) waived: {w['reason']}")
+        for k in ("stale", "expired"):
+            for w in wv[k]:
+                if w.get("type") == "category":
+                    lines.append(f"  {k}: {w['id']} category {scope(w)}: {w['reason']}")
+                else:
+                    lines.append(f"  {k}: {w['id']} {w['check_id']} @ {w['timecode_start']}-"
+                                 f"{w['timecode_end']} (frames {w['frame_start']}-{w['frame_end']}): {w['reason']}")
     return "\n".join(lines) + "\n"

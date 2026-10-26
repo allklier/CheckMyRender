@@ -9,8 +9,9 @@ Profile rules (CLAUDE.md "Substitution rules"):
   interpolated with str(); the referenced value must then be a scalar.
 - Path segments that are integers index into lists (${spec.audio.tracks.0.layout}).
 - Missing key = ConfigError. Only the `spec.` namespace exists; no expressions.
-- Per check: reserved keys `enabled` (default true), `severity` (default fail) and
-  `quality` (fast|high, default high); all other keys are check params.
+- Per check: reserved keys `enabled` (default true), `severity` (default fail),
+  `quality` (fast|high, default high) and `max_findings` (report cap, 0 = all; default
+  from `cmr check --max-findings`, 10); all other keys are check params.
 """
 from __future__ import annotations
 

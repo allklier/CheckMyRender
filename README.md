@@ -25,7 +25,7 @@ roadmap and design decisions.
 - **Spec sheet** (YAML, `examples/`): the facts about one job - fps, duration, timecode, audio
   layout, head/tail layout. Profiles reference it as `${spec.*}`.
 - Checks are plugins; all of them run in one ffmpeg pass per file. See
-  [docs/check-interface.md](docs/check-interface.md).
+  [src/cmr/CLAUDE.md](src/cmr/CLAUDE.md).
 - Results: console plus JSON report. Exit code 0 pass, 1 warn, 2 fail, 3 tool/config error.
 
 ## Quick start
@@ -43,10 +43,16 @@ cmr check render.mov --profile review --spec examples/spec_review.yaml --report 
 
 (Without installing, `PYTHONPATH=src python3 -m cmr ...` also works if the dependencies are present.)
 
+Run modes: `--mode foreground` (default) is the fastest; `--mode background` lowers CPU and I/O priority,
+uses fewer ffmpeg threads and caps memory, for use while other apps (e.g. Flame) are busy.
+
+Reviewed findings can be waived (`cmr waive`, per finding or per check category with a severity ceiling) and
+reports list at most 10 findings per check (`--max-findings`); suppressed ones are counted, not ignored.
+
 Other commands: `cmr probe FILE`, `cmr profiles list`, `cmr profiles show NAME --spec SPEC`.
 
 ## Layout
-`src/cmr/` code, `profiles/` rules, `examples/` sample specs, `docs/` reference, `tests/` tests
+`src/cmr/` code, `profiles/` rules, `examples/` sample specs, per-folder `CLAUDE.md` design notes, `tests/` tests
 (`CMR_TEST_MEDIA=<dir> python3 -m pytest -q`; test media is generated with ffmpeg, not stored).
 
 More detail: [USERGUIDE.md](USERGUIDE.md) (stub). License: MPL 2.0 ([LICENSE](LICENSE)).

@@ -49,7 +49,7 @@ def score_clip(clip: dict, cands: list[dict]) -> dict:
             mattes.append(ev["edge"])
             continue
         fp.append(f"{ev['edge']}/{ev['kind']}{'/P' if ev['persistent'] else ''}"
-                  f"@{c['frame_start']}-{c['frame_end']}")
+                  f"@{c.frame_start}-{c.frame_end}")
     return {"planted": sum(d.get("expect", True) for d in clip["defects"]), "hit": hit,
             "exact": exact, "fp": fp, "mattes": mattes, "below": below}
 

@@ -5,7 +5,7 @@ per-frame options; it prints lavfi.signalstats.YHIGH etc. for every frame), on 8
 tv-range luma (black = 16):
   quality high: `format=yuv420p,signalstats` - YHIGH identical per frame to the former
     `format=yuv444p,signalstats` (0 differences over 1,980 test frames, see
-    docs/quality-modes.md) at ~45% of its cost (only the chroma planes differ).
+    src/cmr/checks/CLAUDE.md) at ~45% of its cost (only the chroma planes differ).
   quality fast: `scale=iw/4:ih/4:flags=area+accurate_rnd,format=yuv420p,signalstats`
     (1/16 of the pixels, every frame). Area averaging lowers YHIGH on grainy near-black
     (more frames called black = more candidates, not fewer) and raises it where thin

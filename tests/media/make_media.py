@@ -33,7 +33,11 @@ FILENAME = "SHOWNAME_101_HD_2398_ST_v03.mov"
 BASE = dict(
     filename=FILENAME,
     width=1920, height=1080, fps="24000/1001",
-    vcodec=["-c:v", "prores_ks", "-profile:v", "hq"], pix_fmt="yuv422p10le",
+    # prores_metadata: on ffmpeg 5.1 prores_ks leaves the ProRes frame header colour unknown
+    # despite -color_* (MOV colr atom is right) and ffprobe reports the header; tests/CLAUDE.md
+    vcodec=["-c:v", "prores_ks", "-profile:v", "hq", "-bsf:v",
+            "prores_metadata=color_primaries=bt709:color_trc=bt709:colorspace=bt709"],
+    pix_fmt="yuv422p10le",
     color=["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
            "-color_range", "tv"],
     slate=1, head_black=23, program=48, tail_black=24,
@@ -72,7 +76,9 @@ def make(outdir, name: str, **overrides) -> Path:
     total = head + o["program"] + o["tail_black"]
     samples = int(total * o["sample_rate"] / fps)     # exact for 48k @ 23.976 (2002/frame)
 
-    vchain = [f"drawbox=x=0:y=0:w=iw:h=ih:color=gray:t=fill:enable='lt(n,{o['slate']})'",
+    # trim, not -frames:v: on ffmpeg 5.1 -frames:v ends the output early and cuts queued audio
+    vchain = [f"trim=end_frame={total}",
+              f"drawbox=x=0:y=0:w=iw:h=ih:color=gray:t=fill:enable='lt(n,{o['slate']})'",
               f"drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='between(n,{o['slate']},{head - 1})'",
               f"drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='gte(n,{head + o['program']})'"]
     if o["vf_extra"]:
@@ -93,7 +99,7 @@ def make(outdir, name: str, **overrides) -> Path:
         scc.write_text(SCC.format(tc="00:00:00:01"))
         cmd += ["-i", str(scc)]
         maps += ["-map", f"{o['audio_tracks'] + 1}:0", "-c:s", "copy"]
-    cmd += ["-filter_complex", ";".join(fc), *maps, "-frames:v", str(total),
+    cmd += ["-filter_complex", ";".join(fc), *maps,
             *o["vcodec"], "-pix_fmt", o["pix_fmt"], *o["color"],
             "-c:a", o["acodec"], "-ac", str(o["channels"]), *o["extra_args"]]
     if o["timecode"]:

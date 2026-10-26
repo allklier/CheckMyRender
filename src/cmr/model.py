@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, asdict
 from enum import IntEnum
 from typing import Any
 
-SCHEMA_VERSION = "1.0"   # Candidate / Finding / report schema version
+SCHEMA_VERSION = "1.2"   # Candidate / Finding / report schema version (1.1: waivers; 1.2: findings cap, category waivers; additive)
 
 
 class Severity(IntEnum):
@@ -75,8 +75,9 @@ class Finding:
     candidate: Candidate | None = None
     evidence: list[dict] = field(default_factory=list)
     verifier: dict | None = None            # {decision, p, model_hash}; None = no verifier ran
-    waiver_ref: str | None = None           # waivers = v1.1
+    waiver_ref: str | None = None           # id of the waiver that WAIVED it (D17), else None
     quality: str | None = None              # 'fast' | 'high' mode that produced it (engine fills)
+    waiver: dict | None = None              # {id, status waived|content_changed, reason, distance, tolerance[, note]}
 
     def __post_init__(self):
         self.severity = Severity.parse(self.severity)

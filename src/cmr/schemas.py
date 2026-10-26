@@ -58,7 +58,13 @@ PROFILE_SCHEMA = {
         "checks": {"type": "object", "additionalProperties": {
             "type": "object",
             "properties": {"enabled": {"type": "boolean"}, "severity": _sev_in,
-                           "quality": {"enum": QUALITIES}}}},
+                           "quality": {"enum": QUALITIES},
+                           # findings listed per check before the rest is summarised; 0 = all
+                           "max_findings": {"type": "integer", "minimum": 0}}}},
+        "waivers": {"type": "object", "additionalProperties": False,   # matching tolerances (D17)
+                    "properties": {"video_max_bits": {"type": "integer", "minimum": 0, "maximum": 64},
+                                   "audio_max_db": {"type": "number", "minimum": 0},
+                                   "margin_frames": {"type": "integer", "minimum": 0}}},
     },
     "additionalProperties": False,
 }
@@ -85,21 +91,60 @@ FINDING_SCHEMA = {
         "evidence": {"type": "array"},
         "verifier": {"type": ["object", "null"]}, "waiver_ref": {"type": ["string", "null"]},
         "quality": {"enum": QUALITIES + [None]},
+        "waiver": {"oneOf": [{"type": "null"}, {
+            "type": "object", "required": ["id", "status", "reason"],
+            "properties": {"id": {"type": "string"},
+                           "status": {"enum": ["waived", "content_changed"]},
+                           "type": {"enum": ["category"]}}}]},
     },
+}
+_span = {"frame_start": _loc, "frame_end": _loc, "timecode_start": _tc, "timecode_end": _tc}
+_counts = {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}}
+SUPPRESSED_SCHEMA = {   # 1.2: findings over the per-check cap, one entry per check
+    "type": "object",
+    "required": ["check_id", "count", "limit", "worst_severity", "by_severity", *_span],
+    "additionalProperties": False,
+    "properties": {"check_id": {"type": "string"}, "count": {"type": "integer", "minimum": 1},
+                   "limit": {"type": "integer", "minimum": 1},
+                   "worst_severity": {"enum": SEVERITY_NAMES}, "by_severity": _counts, **_span},
+}
+WAIVED_BY_CATEGORY_SCHEMA = {   # 1.2: findings waived by one category waiver, per check
+    "type": "object",
+    "required": ["check_id", "waiver_id", "count", "worst_raw_severity", *_span],
+    "additionalProperties": False,
+    "properties": {"check_id": {"type": "string"}, "waiver_id": {"type": "string"},
+                   "count": {"type": "integer", "minimum": 1},
+                   "worst_raw_severity": {"enum": SEVERITY_NAMES}, **_span},
 }
 REPORT_SCHEMA = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "required": ["schema_version", "tool", "profile", "spec", "files", "summary"],
     "properties": {
-        "schema_version": {"const": "1.0"},
+        # 1.1 (additive): finding.waiver, counts.WAIVED, waivers
+        # 1.2 (additive): files[].suppressed, files[].waived_by_category, summary.max_findings /
+        #     check_limits / suppressed / waived_by_category (counts stay complete)
+        "schema_version": {"const": "1.2"},
         "tool": {"type": "object", "required": ["name", "version", "ffmpeg"]},
         "profile": {"type": "object", "required": ["name", "sha256"]},
         "spec": {"type": "object", "required": ["path", "sha256"]},
         "files": {"type": "array", "items": {
-            "type": "object", "required": ["path", "identity", "timeline", "worst", "findings"],
+            "type": "object", "required": ["path", "identity", "timeline", "worst", "findings",
+                                           "suppressed", "waived_by_category"],
             "properties": {"worst": {"enum": SEVERITY_NAMES},
-                           "findings": {"type": "array", "items": FINDING_SCHEMA}}}},
-        "summary": {"type": "object", "required": ["worst", "exit_code", "counts"]},
+                           "findings": {"type": "array", "items": FINDING_SCHEMA},
+                           "suppressed": {"type": "array", "items": SUPPRESSED_SCHEMA},
+                           "waived_by_category": {"type": "array",
+                                                  "items": WAIVED_BY_CATEGORY_SCHEMA}}}},
+        "summary": {"type": "object",
+                    "required": ["worst", "exit_code", "counts", "max_findings", "check_limits",
+                                 "suppressed", "waived_by_category"],
+                    "properties": {
+                        "max_findings": {"type": "integer", "minimum": 0},
+                        "check_limits": _counts,
+                        "suppressed": {"type": "integer", "minimum": 0},
+                        "waived_by_category": {"type": "integer", "minimum": 0}}},
+        "waivers": {"type": "object",   # present only with `cmr check --waivers FILE`
+                    "required": ["file", "applied", "content_changed", "stale", "expired"]},
     },
 }

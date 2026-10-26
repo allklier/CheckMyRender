@@ -271,14 +271,17 @@ class Loudness(Check):
         if abs(m["integrated_lufs"] - m["target_lufs"]) > m["tolerance_lu"]:
             out.append(ctx.finding(f"integrated loudness outside {m['target_lufs']} +-{m['tolerance_lu']} LU; "
                                    + summary, expected=f"{m['target_lufs']} +-{m['tolerance_lu']} LUFS",
-                                   actual=round(m["integrated_lufs"], 1), **loc))
+                                   actual=round(m["integrated_lufs"], 1),
+                                   **{**loc, "evidence": [{**m, "kind": "integrated"}]}))
         if m["tp_block"]:
             out.append(ctx.finding(f"true peak above {m['true_peak_max_dbtp']} dBTP (first in this 100 ms "
                                    f"block); " + summary, expected=f"<= {m['true_peak_max_dbtp']} dBTP",
                                    actual=m["true_peak_dbtp"],
-                                   **{**loc, "frame_start": m["tp_block"][0], "frame_end": m["tp_block"][1]}))
+                                   **{**loc, "frame_start": m["tp_block"][0], "frame_end": m["tp_block"][1],
+                                      "evidence": [{**m, "kind": "true_peak"}]}))
         lra_max = ctx.params.get("lra_max_lu")
         if lra_max is not None and m["lra_lu"] > lra_max:
             out.append(ctx.finding(f"loudness range above {lra_max} LU; " + summary,
-                                   expected=f"<= {lra_max} LU", actual=round(m["lra_lu"], 1), **loc))
+                                   expected=f"<= {lra_max} LU", actual=round(m["lra_lu"], 1),
+                                   **{**loc, "evidence": [{**m, "kind": "lra"}]}))
         return out or [ctx.finding(summary, Severity.PASS, actual=round(m["integrated_lufs"], 1), **loc)]

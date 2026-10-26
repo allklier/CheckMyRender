@@ -103,3 +103,12 @@ def test_probe_cli(media, capsys):
     assert main(["probe", str(media["good"])]) == 0
     d = json.loads(capsys.readouterr().out)
     assert d["video"][0]["codec_profile"] == "422 HQ" and d["timecode"] == "00:59:59:00"
+
+
+def test_probe_reads_only_a_few_video_frames(media):
+    """Regression: unbounded -show_frames on ffmpeg 5.1 printed GBs and held ~60 GB of RAM."""
+    from cmr.media import ffprobe
+    raw = ffprobe(Path(media["good"]))
+    assert 0 < len(raw["frames"]) <= 10
+    assert {f["stream_index"] for f in raw["frames"]} <= {
+        s["index"] for s in raw["streams"] if s["codec_type"] == "video"}

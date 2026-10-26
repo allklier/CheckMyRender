@@ -19,7 +19,7 @@ SPEC = {"spec_version": 1, "timing": {"program_start_timecode": "01:00:00:00",
 def tiny(tmp_path_factory):
     p = tmp_path_factory.mktemp("tiny") / "tiny.mov"
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=64x48:r=25",
-                    "-f", "lavfi", "-i", "sine=r=48000", "-frames:v", "10", "-t", "0.4",
+                    "-f", "lavfi", "-i", "sine=r=48000", "-t", "0.4",   # no -frames:v: cuts audio on 5.1
                     "-c:v", "prores_ks", "-pix_fmt", "yuv422p10le", "-c:a", "pcm_s16le",
                     "-timecode", "00:59:59:23", str(p)], check=True)
     return p

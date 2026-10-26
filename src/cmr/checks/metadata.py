@@ -30,6 +30,20 @@ def _ratio(v) -> Fraction | None:
     return Fraction(str(v).replace(":", "/"))
 
 
+def effective_aspects(v: dict) -> tuple[Fraction, Fraction]:
+    """(pixel aspect, display aspect) of a video stream. An untagged sample aspect ratio means
+    square pixels (ffmpeg's convention; H.264 from Adobe Media Encoder carries none), and an
+    untagged display aspect is width/height x pixel aspect."""
+    par = _ratio(v["sample_aspect_ratio"]) or Fraction(1)
+    dar = _ratio(v["display_aspect_ratio"]) or Fraction(v["width"], v["height"]) * par
+    return par, dar
+
+
+def bit_depth_comparable(a: dict) -> bool:
+    """Only PCM has a bit depth; lossy audio (AAC, AC-3, ...) reports none."""
+    return a["codec"].startswith("pcm_")
+
+
 @register
 class ContainerFormat(Check):
     id = "container.format"
@@ -57,11 +71,12 @@ class VideoResolution(Check):
         v, p = _v0(ctx), ctx.params
         par = p.get("pixel_aspect")
         dar = p.get("aspect_ratio")
+        act_par, act_dar = effective_aspects(v)
         return _compare(ctx, [
             ("width", p.get("width"), v["width"]),
             ("height", p.get("height"), v["height"]),
-            ("pixel aspect", None if par is None else Fraction(str(par)), _ratio(v["sample_aspect_ratio"])),
-            ("display aspect", None if dar is None else _ratio(dar), _ratio(v["display_aspect_ratio"])),
+            ("pixel aspect", None if par is None else Fraction(str(par)), act_par),
+            ("display aspect", None if dar is None else _ratio(dar), act_dar),
         ], v["index"])
 
 
@@ -136,10 +151,11 @@ class AudioFormat(Check):
             raise Skip("no audio streams")
         p, out = ctx.params, []
         for a in ctx.media.audio:
-            out += _compare(ctx, [(f"audio stream {a['index']} codec", p.get("codec"), a["codec"]),
-                                  (f"audio stream {a['index']} sample rate", p.get("sample_rate"), a["sample_rate"]),
-                                  (f"audio stream {a['index']} bit depth", p.get("bit_depth"), a["bit_depth"])],
-                            a["index"])
+            items = [(f"audio stream {a['index']} codec", p.get("codec"), a["codec"]),
+                     (f"audio stream {a['index']} sample rate", p.get("sample_rate"), a["sample_rate"])]
+            if bit_depth_comparable(a):
+                items.append((f"audio stream {a['index']} bit depth", p.get("bit_depth"), a["bit_depth"]))
+            out += _compare(ctx, items, a["index"])
         return out
 
 

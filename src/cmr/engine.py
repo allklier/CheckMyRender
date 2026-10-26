@@ -1,6 +1,6 @@
 """Engine: check registry, timeline, single decode pass, detect -> verify -> evaluate.
 
-Check interface (see docs/check-interface.md for the contract other modules build on):
+Check interface (see src/cmr/CLAUDE.md for the contract other modules build on):
 
     @register
     class MyCheck(Check):
@@ -57,6 +57,9 @@ from .config import ConfigError   # raise from a check for unusable params -> "c
 from .media import MediaInfo, ProbeError, probe
 from .model import Candidate, Finding, Severity
 from .timecode import TimecodeError, frames_to_tc, parse_fps, tc_is_drop, tc_to_frames
+
+# profile check-entry keys that are not check params (max_findings: report cap, read by cli)
+RESERVED_KEYS = ("enabled", "severity", "quality", "max_findings")
 
 
 # --- registry ---------------------------------------------------------------------
@@ -285,7 +288,7 @@ def build_graph(taps: list[tuple[str, Tap, str]], kinds: dict[int, str], tmp: Pa
 def default_filter_threads() -> int:
     """-filter_complex_threads default: half the CPUs, max 8. Measured (16-CPU box,
     1080p ProRes, blanking+black taps): 1 thread and 16 (= ffmpeg default, all CPUs)
-    were slowest; 4-8 fastest (see docs/check-interface.md). Override: run_file(filter_threads=N),
+    were slowest; 4-8 fastest (see src/cmr/CLAUDE.md). Override: run_file(filter_threads=N),
     CLI --filter-threads N."""
     return max(1, min(8, (os.cpu_count() or 2) // 2))
 
@@ -404,7 +407,7 @@ def run_file(path: Path, spec: dict, profile: dict, ffmpeg_bin="ffmpeg", ffprobe
             hint = f" (plugin import errors: {IMPORT_ERRORS})" if IMPORT_ERRORS else ""
             findings.append(Finding(cid, Severity.ERROR, f"unknown check id{hint}"))
             continue
-        params = {k: v for k, v in cfg.items() if k not in ("enabled", "severity", "quality")}
+        params = {k: v for k, v in cfg.items() if k not in RESERVED_KEYS}
         quality = cfg.get("quality", "high")
         try:
             sev = Severity.parse(cfg.get("severity", "fail"))

@@ -51,6 +51,7 @@ checks:
     max_black_run_frames: 12     # ~0.5 s at 24p; a fade or cut to black below this passes
   video.blanking:                 # 1px edge defects; thresholds default in the check, tune here
     severity: fail
+    dark_edge_mode: flag          # dark picture at an edge (class dark_edge): flag | info | hide
   audio.loudness:                 # BS.1770 relative-gated over the program range (not dialogue-gated)
     loudness: "${spec.audio.loudness}"    # spec names the standard + program_track only
     standards:                    # numbers per standard live here, not in the spec
@@ -67,3 +68,8 @@ checks:
     severity: fail
   decode.errors:
     max_lines: 20
+# Waiver matching (D17; used with `cmr check --waivers FILE`). Defaults shown.
+waivers:
+  video_max_bits: 10              # max dHash distance (of 64 bits) on any sampled frame
+  audio_max_db: 2.0               # max per-frame peak/RMS difference (dB) on any sampled frame
+  margin_frames: 5                # finding may extend this far outside the waived range
