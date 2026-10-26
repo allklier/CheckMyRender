@@ -3,16 +3,20 @@
 # install.sh does NOT use the `channels:` list below: it always runs conda with
 # `--override-channels -c conda-forge` (no Anaconda `defaults` channel, no Anaconda ToS/licence
 # question). The list is here so a human can also do `conda env create -p DIR -f environment.yml`
-# (all lines, or without the ffmpeg line to use the system ffmpeg).
+# (all lines; without the ffmpeg line only to use the system ffmpeg on purpose).
 #
 # Tags (read by install.sh):
-#   # cmr:ffmpeg  only when the system ffmpeg/ffprobe fail the acceptance test (version >= 5.1
-#                 and every filter in required_filters.txt); never replaces the system ffmpeg.
+#   # cmr:ffmpeg  installed by default (the pinned, tested version, same on every machine);
+#                 left out only with `install.sh --use-system-ffmpeg` when the system
+#                 ffmpeg/ffprobe pass the acceptance test (version >= 5.1 and every filter in
+#                 required_filters.txt); never replaces the system ffmpeg.
 #                 Installed into the same env as everything else (<prefix>/env): conda-forge
 #                 ffmpeg 7.1 and tesseract 5.5.2 solve together (ffmpeg 6.1 did not: libxml2
 #                 conflict, so older installs had a separate <prefix>/ffmpeg-env; install.sh
 #                 migrates those).
 #   # cmr:slate   only without --no-slate (tesseract for the slate OCR checks, D27)
+#   # cmr:demo    only without --no-demo (Pillow + numpy for the bundled demo spot generator,
+#                 run once at install time; cmr itself does not import them)
 # Untagged lines are always installed. PyYAML and jsonschema come from conda-forge so the cmr
 # wheel is installed with `pip --no-deps --no-index` (pip never contacts PyPI).
 name: cmr
@@ -29,3 +33,5 @@ dependencies:
                       #   has no libx264, untested with cmr)
   - tesseract=5.5.2   # cmr:slate  (pinned, D32: same OCR on Linux and macOS)
   - leptonica=1.87    # cmr:slate  (tesseract's image library, pinned with it)
+  - pillow            # cmr:demo   (demo spot generator demo/make_spot.py; not used by cmr itself)
+  - numpy             # cmr:demo

@@ -12,10 +12,12 @@ set -u -o pipefail
 # sha256sum or `shasum -a 256`, no `date %N`, no `grep \s`, POSIX character classes).
 
 PROG=install.sh
-MIN_FFMPEG_MAJOR=5 MIN_FFMPEG_MINOR=1      # oldest ffmpeg cmr is tested with (5.1.10, Rocky 9)
+MIN_FFMPEG_MAJOR=5 MIN_FFMPEG_MINOR=1      # oldest system ffmpeg accepted with --use-system-ffmpeg (5.1.10, Rocky 9)
 CHANNEL=conda-forge                        # every conda package comes from here only
 NEED_MB_SLATE=3072 NEED_MB_NOSLATE=2048 NEED_MB_UPDATE=512   # free space checks (estimates; measured 2026-10-26:
 # env ffmpeg 7.1 + tesseract 1.2 GB + ~0.56 GB package cache, --no-slate env with ffmpeg 765 MB + cache)
+NEED_MB_ADD_FFMPEG=1024   # update that adds ffmpeg to an existing env (measured ~0.7 GB, migration run)
+NEED_MB_DEMO=512          # demo spots not created yet: Pillow + numpy (+ cache) and ~190 MB of media in the workspace
 # Miniforge is pinned: only the versioned release files have a `.sha256` next to them
 # (releases/latest/download/Miniforge3-<platform>.sh.sha256 is a 404; checked 2026-10-26)
 MINIFORGE_VERSION=26.9.4-0
@@ -31,16 +33,17 @@ PREFIX="$HOME/.local/share/cmr"
 WORKSPACE="$HOME/cmr-workspace"
 BIN_DIR="$HOME/.local/bin"
 BIN_DIR_SET=0 WORKSPACE_SET=0
-DRY=0 YES=0 SLATE=1 UPGRADE=0 UNINSTALL=0 BOOTSTRAP=0 OFFLINE_DIR=""
-STEP=0 STEPS=9
+DRY=0 YES=0 SLATE=1 DEMO=1 UPGRADE=0 UNINSTALL=0 BOOTSTRAP=0 OFFLINE_DIR="" USE_SYSTEM_FF=0
+STEP=0 STEPS=10
 
 usage() {
     cat <<EOF
 Usage: $PROG [options]
 
 Installs CheckMyRender for the current user (no sudo): a conda environment with Python 3.12,
-the cmr package, tesseract (slate OCR) and, only if the system one is not good enough, ffmpeg;
-a 'cmr' launcher in ~/.local/bin; examples/templates in a workspace folder.
+the cmr package, tesseract (slate OCR) and the pinned, tested ffmpeg (conda-forge 7.1.1, so
+every machine gives comparable results; the system ffmpeg is never changed); a 'cmr' launcher
+in ~/.local/bin; examples/templates in a workspace folder, with demo spots to try cmr on.
 
 Options:
   --prefix DIR        install location (default ~/.local/share/cmr; env in DIR/env)
@@ -49,6 +52,13 @@ Options:
                       (a re-run, --upgrade or --uninstall of the same --prefix reuses the
                       previous --workspace and --bin-dir unless they are given again)
   --no-slate          do not install tesseract (slate OCR checks then report ERROR)
+  --no-demo           do not create the demo spots (a clean slated spot in
+                      templates/starter/media and spots with planted errors in demo_spots/,
+                      ~190 MB, ~10-60 s) and do not install Pillow/numpy, which only the demo
+                      generator needs; demo files are created once and never overwritten
+  --use-system-ffmpeg use the system ffmpeg/ffprobe instead of the pinned 7.1.1 when it is
+                      >= 5.1 with every required filter (results may differ from the tested
+                      7.1.1); give it on every run, a run without it switches to 7.1.1
   --upgrade           refresh the environment and reinstall cmr even if this version is installed
   --uninstall         remove the environment, launcher and prefix (asks first)
   --bootstrap-conda   if no conda is found, install Miniforge into DIR/conda without asking
@@ -129,6 +139,8 @@ while [ $# -gt 0 ]; do
         --offline-dir) [ $# -ge 2 ] || die "--offline-dir needs a directory" "$PROG --help" 2; OFFLINE_DIR=$2; shift;;
         --offline-dir=*) OFFLINE_DIR=${1#*=};;
         --no-slate) SLATE=0;;
+        --no-demo) DEMO=0;;
+        --use-system-ffmpeg) USE_SYSTEM_FF=1;;
         --upgrade) UPGRADE=1;;
         --uninstall) UNINSTALL=1;;
         --bootstrap-conda) BOOTSTRAP=1;;
@@ -202,6 +214,7 @@ if ((UNINSTALL)); then
     say "This removes: $PREFIX (conda environment, ffmpeg links, state$( [ -d "$PREFIX/conda" ] && printf ', bootstrapped Miniforge'))"
     grep -qF "$LAUNCHER_MARK" "$LAUNCHER" 2>/dev/null && say "and the launcher $LAUNCHER"
     say "Kept: your workspace ($WORKSPACE) and the logs ($LOG_DIR)."
+    [ -f "$WORKSPACE/.cmr-demo-files" ] && say "      The demo spots stay in the workspace too (delete $WORKSPACE/demo_spots yourself if you do not need them)."
     ask "Remove CheckMyRender?" || { say "Cancelled, nothing removed."; exit 3; }
     if grep -qF "$LAUNCHER_MARK" "$LAUNCHER" 2>/dev/null; then
         act "remove $LAUNCHER"; ((DRY)) || rm -f "$LAUNCHER"
@@ -262,13 +275,19 @@ esac
 
 need=$NEED_MB_NOSLATE; ((SLATE)) && need=$NEED_MB_SLATE
 [ "$MODE" = install ] || need=$NEED_MB_UPDATE
+# an existing env without ffmpeg (system-ffmpeg install, old ffmpeg-env layout) gets it added
+[ "$MODE" != install ] && ((!USE_SYSTEM_FF)) && [ ! -x "$ENV/bin/ffmpeg" ] && need=$NEED_MB_ADD_FFMPEG
+# demo spots not created into this workspace yet (no record): Pillow/numpy + media to come
+DEMO_LIST="$WORKSPACE/.cmr-demo-files"
+DEMO_TODO=0; ((DEMO)) && [ ! -f "$DEMO_LIST" ] && DEMO_TODO=1
+((DEMO_TODO)) && need=$((need + NEED_MB_DEMO))
 d=$PREFIX; while [ ! -d "$d" ]; do d=$(dirname "$d"); done
 avail=$(df -Pk "$d" 2>/dev/null | awk 'NR==2 {print int($4/1024)}')
 [ -n "$avail" ] || die "cannot read the free disk space of $d (df failed)" "check that $d is a mounted file system" 1
 log INFO "free space $avail MB on the file system of $d, need $need MB"
 if [ "$avail" -lt "$need" ]; then
     die "not enough free disk space: $avail MB free on the file system of $d, about $need MB needed" \
-        "free some space, choose another disk with --prefix DIR$( ((SLATE)) && printf ', or skip the slate OCR (~0.9 GB with the conda package cache) with --no-slate')" 1
+        "free some space, choose another disk with --prefix DIR$( ((SLATE)) && printf ', or skip the slate OCR (~0.9 GB with the conda package cache) with --no-slate')$( ((DEMO_TODO)) && printf ', or skip the demo spots with --no-demo')" 1
 fi
 say "  Disk: $avail MB free, about $need MB needed"
 
@@ -299,7 +318,13 @@ else
 fi
 
 # --- 3. ffmpeg ------------------------------------------------------------------------------
-step "Check the system ffmpeg/ffprobe (never changed)"
+# Default: the pinned conda-forge ffmpeg (environment.yml, `# cmr:ffmpeg`) in cmr's own env on
+# every machine, so results are comparable (user decision 2026-10-26: Rocky's 5.1.10 ffprobe
+# reported colour tags of ProRes as unknown where 7.1 reads bt709). The system ffmpeg is used only
+# with --use-system-ffmpeg and when it passes the acceptance test below; it is never changed.
+step "Choose ffmpeg/ffprobe (the system ones are never changed)"
+FF_PIN=$(sed -n 's/^ *- *ffmpeg=\([^ #]*\).*# cmr:ffmpeg.*/\1/p' "$BUNDLE/environment.yml" | head -1)
+FF_PIN=${FF_PIN:-pinned}
 REQ_FILTERS=()
 while IFS= read -r f; do REQ_FILTERS[${#REQ_FILTERS[@]}]=$f
 done < <(grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$BUNDLE/required_filters.txt")
@@ -317,28 +342,38 @@ version_ok() { local v=$1; [ -n "$v" ] || return 1
     [ "${v%%.*}" -gt "$MIN_FFMPEG_MAJOR" ] || { [ "${v%%.*}" -eq "$MIN_FFMPEG_MAJOR" ] && [ "${v#*.}" -ge "$MIN_FFMPEG_MINOR" ]; }; }
 FF_MODE=env FF_PATH="" FP_PATH="" FF_WHY=""
 SYS_FF=$(find_system ffmpeg) SYS_FP=$(find_system ffprobe)
-if [ -z "$SYS_FF" ] || [ -z "$SYS_FP" ]; then
-    FF_WHY="ffmpeg/ffprobe not found on PATH"
-else
-    vff=$(ff_version "$SYS_FF") vfp=$(ff_version "$SYS_FP")
-    log INFO "system ffmpeg $SYS_FF version '$vff', ffprobe $SYS_FP version '$vfp'"
-    if ! version_ok "$vff" || ! version_ok "$vfp"; then
-        FF_WHY="$SYS_FF version '${vff:-unknown}' / ffprobe '${vfp:-unknown}' is older than $MIN_FFMPEG_MAJOR.$MIN_FFMPEG_MINOR or unreadable"
+if ((USE_SYSTEM_FF)); then   # opt-in: today's acceptance test (>= 5.1, every required filter)
+    if [ -z "$SYS_FF" ] || [ -z "$SYS_FP" ]; then
+        FF_WHY="ffmpeg/ffprobe not found on PATH"
     else
-        # flag columns: T S C up to ffmpeg 7.1, T S from 8.0 (same rule as engine.available_filters)
-        have=$("$SYS_FF" -hide_banner -filters 2>/dev/null | sed -n 's/^ [T.][S.][C.]\{0,1\} \([^ ][^ ]*\)  *[^ ][^ ]*->[^ ][^ ]*.*/\1/p')
-        miss=""
-        for f in ${REQ_FILTERS[@]+"${REQ_FILTERS[@]}"}; do grep -qx -- "$f" <<<"$have" || miss+="${miss:+, }$f"; done
-        if [ -n "$miss" ]; then FF_WHY="$SYS_FF $vff lacks filters: $miss"
-        else FF_MODE=system FF_PATH=$SYS_FF FP_PATH=$SYS_FP; fi
+        vff=$(ff_version "$SYS_FF") vfp=$(ff_version "$SYS_FP")
+        log INFO "system ffmpeg $SYS_FF version '$vff', ffprobe $SYS_FP version '$vfp'"
+        if ! version_ok "$vff" || ! version_ok "$vfp"; then
+            FF_WHY="$SYS_FF version '${vff:-unknown}' / ffprobe '${vfp:-unknown}' is older than $MIN_FFMPEG_MAJOR.$MIN_FFMPEG_MINOR or unreadable"
+        else
+            # flag columns: T S C up to ffmpeg 7.1, T S from 8.0 (same rule as engine.available_filters)
+            have=$("$SYS_FF" -hide_banner -filters 2>/dev/null | sed -n 's/^ [T.][S.][C.]\{0,1\} \([^ ][^ ]*\)  *[^ ][^ ]*->[^ ][^ ]*.*/\1/p')
+            miss=""
+            for f in ${REQ_FILTERS[@]+"${REQ_FILTERS[@]}"}; do grep -qx -- "$f" <<<"$have" || miss+="${miss:+, }$f"; done
+            if [ -n "$miss" ]; then FF_WHY="$SYS_FF $vff lacks filters: $miss"
+            else FF_MODE=system FF_PATH=$SYS_FF FP_PATH=$SYS_FP; fi
+        fi
     fi
 fi
 if [ "$FF_MODE" = system ]; then
-    say "  System ffmpeg is good enough: $SYS_FF ($vff >= $MIN_FFMPEG_MAJOR.$MIN_FFMPEG_MINOR, all ${#REQ_FILTERS[@]} required filters) - cmr will use it"
+    say "  --use-system-ffmpeg: $SYS_FF ($vff >= $MIN_FFMPEG_MAJOR.$MIN_FFMPEG_MINOR, all ${#REQ_FILTERS[@]} required filters) - cmr will use it"
+    warn "--use-system-ffmpeg: results may differ from the tested ffmpeg $FF_PIN and from other machines (e.g. ffprobe 5.1 reads ProRes colour tags as unknown, other versions differ in other ways); run without the flag to use $FF_PIN"
 else
     FF_PATH="$ENV/bin/ffmpeg" FP_PATH="$ENV/bin/ffprobe"
-    say "  $FF_WHY"
-    say "  -> installing $CHANNEL ffmpeg into cmr's own environment $ENV (the system ffmpeg is not touched)"
+    if ((USE_SYSTEM_FF)); then
+        warn "--use-system-ffmpeg: the system ffmpeg cannot be used: $FF_WHY"
+        say "  -> installing the pinned $CHANNEL ffmpeg $FF_PIN into cmr's own environment $ENV instead"
+    else
+        say "  Using the pinned, tested $CHANNEL ffmpeg $FF_PIN in cmr's own environment $ENV (same on every machine)"
+        [ "$(old ffmpeg_mode)" = system ] \
+            && say "  The previous install used the system ffmpeg ($(old ffmpeg)); switching to $FF_PIN (--use-system-ffmpeg keeps the system one)"
+        [ -n "$SYS_FF" ] && say "  System ffmpeg $SYS_FF is not used and not touched (opt in with --use-system-ffmpeg)"
+    fi
 fi
 
 # --- 4. network -----------------------------------------------------------------------------
@@ -390,11 +425,14 @@ while IFS= read -r line; do
     case $line in
         *"# cmr:ffmpeg"*) [ "$FF_MODE" = env ] || continue;;
         *"# cmr:slate"*)  ((SLATE)) || continue;;
+        *"# cmr:demo"*)   ((DEMO)) || continue;;
     esac
     SPECS+=("$spec")
 done < <(sed -n '/^dependencies:/,$p' "$BUNDLE/environment.yml")
 say "  Packages ($CHANNEL only): ${SPECS[*]-}"
 ((SLATE)) || say "  Slate OCR skipped (--no-slate): no tesseract; slate checks will report ERROR"
+((DEMO)) || say "  Demo spots skipped (--no-demo): no Pillow/numpy"
+has_pkg() { ls "$ENV/conda-meta/$1"-[0-9]*.json >/dev/null 2>&1; }   # conda's record of an installed package
 channel_args() { printf '%s\n' --override-channels -c "$CHANNEL"; }   # offline hook: --offline -c file://DIR
 CH=()
 while IFS= read -r a; do CH[${#CH[@]}]=$a; done < <(channel_args)
@@ -404,9 +442,11 @@ if [ ! -x "$ENV/bin/python" ]; then
         || die "conda could not create the environment" \
                "see the log; network/proxy problems: set HTTPS_PROXY or proxy_servers in ~/.condarc; then run again" 1
 else
-    missing=0   # a package newly needed (slate turned back on, system ffmpeg turned bad, old ffmpeg-env)
+    missing=0   # a package newly needed (slate turned back on, ffmpeg in the env where the system one
+                # was used before (default since 2026-10-26, or it turned bad), old ffmpeg-env)
     ((SLATE)) && [ ! -x "$ENV/bin/tesseract" ] && missing=1
     [ "$FF_MODE" = env ] && { [ ! -x "$ENV/bin/ffmpeg" ] || [ ! -x "$ENV/bin/ffprobe" ]; } && missing=1
+    ((DEMO)) && { ! has_pkg pillow || ! has_pkg numpy; } && missing=1   # demo turned on / older install
     if [ "$MODE" = same ] && ((!missing)); then
         say "  Environment is up to date (nothing to add)"
     else
@@ -513,8 +553,8 @@ done
 # --- state ----------------------------------------------------------------------------------
 act "write $STATE"
 if ((!DRY)); then
-    printf 'version=%s\nffmpeg_mode=%s\nffmpeg=%s\nslate=%s\nworkspace=%s\nbin_dir=%s\nconda=%s\ninstalled=%s\n' \
-        "$VERSION" "$FF_MODE" "$FF_PATH" "$SLATE" "$WORKSPACE" "$BIN_DIR" "$CONDA" "$(date '+%Y-%m-%d %H:%M:%S')" >"$STATE"
+    printf 'version=%s\nffmpeg_mode=%s\nffmpeg=%s\nslate=%s\ndemo=%s\nworkspace=%s\nbin_dir=%s\nconda=%s\ninstalled=%s\n' \
+        "$VERSION" "$FF_MODE" "$FF_PATH" "$SLATE" "$DEMO" "$WORKSPACE" "$BIN_DIR" "$CONDA" "$(date '+%Y-%m-%d %H:%M:%S')" >"$STATE"
 fi
 
 # --- 9. verify ------------------------------------------------------------------------------
@@ -555,19 +595,100 @@ else
     fi
 fi
 
+# --- 10. demo spots -------------------------------------------------------------------------
+# The bundled generator (demo/make_spot.py = tests/slate/make_spot.py) makes a 10 s slated
+# ProRes spot (~63 MB) that matches templates/starter unedited, plus spots with planted errors.
+# Created ONCE per workspace: <workspace>/.cmr-demo-files lists what was placed (workspace-
+# relative paths); with that record present nothing is generated again (a demo file the user
+# deleted or moved stays gone). An existing file is never overwritten. The demo files are not
+# templates: they are not in .cmr-installed-files and never updated. A failure only warns.
+step "Demo spots (a clean slated spot to try cmr on, and spots with planted errors)"
+GEN="$BUNDLE/demo/make_spot.py"
+STARTER_MEDIA="templates/starter/media"
+demo_hand="mkdir -p ~/cmr-demo && PATH=$(shq "$FFBIN"):\$PATH $(qcmd "$ENV/bin/python" "$GEN") ~/cmr-demo --short"
+if ((!DEMO)); then
+    say "  Skipped (--no-demo). To make them later: $demo_hand"
+elif [ -f "$DEMO_LIST" ]; then
+    say "  Already created before (listed in $DEMO_LIST); nothing generated again"
+elif [ ! -f "$GEN" ]; then
+    warn "this bundle has no demo generator (demo/make_spot.py): no demo spots created"
+elif ((DRY)); then
+    printf '  [dry-run] would run (into a temporary folder in %s): PATH=%s:$PATH %s TMP/main --short\n' \
+        "$WORKSPACE" "$FFBIN" "$(qcmd "$ENV/bin/python" "$GEN")"
+    printf '  [dry-run] would run: ... %s TMP/typo --short --defect client_typo\n' "$(basename "$GEN")"
+    printf '  [dry-run] would place: %s/<clean spot>.mov, %s/demo_spots/clean/, %s/demo_spots/errors/many_errors/, %s/demo_spots/errors/client_typo/ (existing files are kept)\n' \
+        "$WORKSPACE/$STARTER_MEDIA" "$WORKSPACE" "$WORKSPACE" "$WORKSPACE"
+else
+    say "  Generating (about 60 MB per spot, 10-60 s) ..."
+    t0=$SECONDS
+    gt=$(mktemp -d "$WORKSPACE/.cmr-demo-tmp.XXXXXX") || die "cannot write to $WORKSPACE" "check permissions"
+    gen() {   # gen OUTDIR [ARGS...]: run the generator with the env Python and cmr's ffmpeg
+        local o=$1; shift
+        log INFO "run: demo generator $(qcmd "$o" "$@")"
+        env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 PATH="$FFBIN:$PATH" \
+            "$ENV/bin/python" "$GEN" "$o" --short "$@" >>"$gt/gen.out" 2>&1
+    }
+    if gen "$gt/main" && gen "$gt/typo" --defect client_typo; then
+        cat "$gt/gen.out" >>"$LOG"
+        placed="" bytes=0
+        place() {   # place SRC REL: move a generated file to WORKSPACE/REL unless a file is there
+            local dst="$WORKSPACE/$2"
+            if [ -e "$dst" ]; then log INFO "demo: kept existing $2"; return 0; fi
+            mkdir -p "$(dirname "$dst")" && mv -f "$1" "$dst" || return 1
+            placed+="$2"$'\n'; bytes=$((bytes + $(wc -c <"$dst")))
+        }
+        ok=1
+        for f in "$gt"/main/clean/*.mov; do
+            n=$(basename "$f")
+            place "$f" "demo_spots/clean/$n" || ok=0
+            # the same spot ready to check in the starter folder (a hard link where possible)
+            if [ ! -e "$WORKSPACE/$STARTER_MEDIA/$n" ] && [ -f "$WORKSPACE/demo_spots/clean/$n" ]; then
+                mkdir -p "$WORKSPACE/$STARTER_MEDIA" \
+                    && { ln "$WORKSPACE/demo_spots/clean/$n" "$WORKSPACE/$STARTER_MEDIA/$n" 2>/dev/null \
+                         || cp -p "$WORKSPACE/demo_spots/clean/$n" "$WORKSPACE/$STARTER_MEDIA/$n"; } \
+                    && placed+="$STARTER_MEDIA/$n"$'\n' || ok=0
+            fi
+        done
+        for f in "$gt"/main/errors/*.mov; do place "$f" "demo_spots/errors/many_errors/$(basename "$f")" || ok=0; done
+        place "$gt/main/manifest.yaml" "demo_spots/errors/many_errors/manifest.yaml" || ok=0
+        for f in "$gt"/typo/client_typo/*.mov; do place "$f" "demo_spots/errors/client_typo/$(basename "$f")" || ok=0; done
+        place "$gt/typo/manifest.yaml" "demo_spots/errors/client_typo/manifest.yaml" || ok=0
+        [ -n "$placed" ] && printf '%s' "$placed" >"$DEMO_LIST"
+        if ((ok)); then
+            say "  Created in $((SECONDS - t0)) s ($((bytes / 1048576)) MB): the clean spot in $WORKSPACE/$STARTER_MEDIA (and demo_spots/clean),"
+            say "  spots with planted errors in $WORKSPACE/demo_spots/errors (client_typo: one slate typo; many_errors: many planted errors, listed in its manifest.yaml)"
+        else
+            warn "the demo spots could not all be placed in $WORKSPACE (see the log); the install itself is fine"
+        fi
+    else
+        cat "$gt/gen.out" >>"$LOG"
+        warn "the demo spots could not be generated (the install itself is fine): $(tail -1 "$gt/gen.out")"
+        say "  Run the installer again to retry, or make them by hand: $demo_hand"
+        say "  (a missing font: set CMR_TEST_FONT and CMR_TEST_FONT_REGULAR to a bold and a regular .ttf file)"
+    fi
+    rm -rf "$gt"
+fi
+
 # --- summary --------------------------------------------------------------------------------
 printf '\n'
 ((DRY)) && say "DRY RUN finished: nothing was changed. Summary of what would be installed:"
 ((DRY)) || say "CheckMyRender $VERSION is installed."
 say "  Environment : $ENV (Python 3.12 from $CHANNEL; conda: $CONDA)"
 say "  Launcher    : $LAUNCHER"
-say "  ffmpeg      : $FF_PATH ($( [ "$FF_MODE" = system ] && printf 'system, not changed' || printf 'conda-forge, in cmr'"'"'s environment'))"
+say "  ffmpeg      : $FF_PATH ($( [ "$FF_MODE" = system ] && printf 'system, not changed; --use-system-ffmpeg' || printf 'conda-forge %s, pinned, in cmr'"'"'s environment' "$FF_PIN"))"
 ((SLATE)) && say "  tesseract   : $ENV/bin/tesseract (slate OCR; launcher sets CMR_TESSERACT)" \
           || say "  tesseract   : not installed (--no-slate)"
-say "  Workspace   : $WORKSPACE (examples/, templates/, USERGUIDE.md)"
+say "  Workspace   : $WORKSPACE (examples/, templates/, USERGUIDE.md$( [ -f "$DEMO_LIST" ] && printf ', demo_spots/'))"
 say "  Install log : $( ((DRY)) && printf '(none in dry-run)' || printf '%s' "$LOG")"
 case ":$PATH:" in
-    *":$BIN_DIR:"*) say "Run: cmr doctor   |   cmr check RENDER.mov --profile review --spec SPEC.yaml";;
+    *":$BIN_DIR:"*) say "Run: cmr doctor"
+       if [ -f "$DEMO_LIST" ] || { ((DRY)) && ((DEMO)); }; then
+           say "First check (the starter folder already holds a clean demo spot):"
+           say "        mkdir -p ~/qc && cp -r $WORKSPACE/templates/starter ~/qc/my_first_job && cd ~/qc/my_first_job && cmr check media/*.mov"
+           say "      then read its README.md (try the spots in $WORKSPACE/demo_spots/errors, then your own video)"
+       else
+           say "First check: copy $WORKSPACE/templates/starter, put your video in its media/ folder, then read its README.md"
+       fi;;
     *) rc_file="~/.bashrc"; [ "$OS" = Darwin ] && rc_file="~/.zprofile"
        say "NOTE: $BIN_DIR is not on your PATH. Add it (e.g. in $rc_file):"
        say "        export PATH=\"$BIN_DIR:\$PATH\""

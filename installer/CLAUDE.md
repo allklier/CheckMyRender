@@ -4,21 +4,27 @@ Overview and numbered decisions: ../CLAUDE.md (D1, D2 production Python policy, 
 D31, D32). Status: **first real run done 2026-10-26 on the Rocky 9.7 Flame workstation** (sandboxed
 HOME, existing Anaconda with conda 26.5.3): every checklist item passed after the fixes listed in
 "First real run" below. **Single env with ffmpeg 7.1.1 (2026-10-26):** re-verified on the
-Rocky machine and the Mac ("ffmpeg 7.1 single env" below). Still pre-release (D22).
+Rocky machine and the Mac ("ffmpeg 7.1 single env" below). **Pinned ffmpeg by default
+(2026-10-26, user decision):** every install gets conda-forge ffmpeg 7.1.1; the system ffmpeg only
+with `--use-system-ffmpeg` (tested with fakes + a real `--dry-run`; no real install yet).
+**Demo spots at install time (2026-10-26, user decision):** real runs on Rocky and the Mac (see
+"Demo spots" below). Still pre-release (D22).
 
 ## Files
 | File | Role |
 |---|---|
 | `build_bundle.sh` | builds `dist/cmr-<version>-bundle.tar.gz` (+ `.sha256`) from the source tree |
 | `install.sh` | the installer shipped in the bundle (bash, per user, no sudo) |
-| `environment.yml` | conda package list (tags `# cmr:ffmpeg`, `# cmr:slate`); install.sh reads it |
+| `environment.yml` | conda package list (tags `# cmr:ffmpeg`, `# cmr:slate`, `# cmr:demo`); install.sh reads it |
 | `.gitignore` | `dist/` |
 | `../tests/installer/` | pytest: fakes for conda/ffmpeg/curl/df/uname/id/sysctl/sw_vers/getconf, temp HOME, no network |
 
 ## Bundle (`build_bundle.sh [-o DIR] [--wheel FILE] [--python PY]`)
 `cmr-<v>/`: `install.sh`, `environment.yml`, `required_filters.txt`, `VERSION`, `README.txt`,
 `README.md`, `USERGUIDE.md`, `wheels/check_my_render-<v>-py3-none-any.whl`, `examples/` + `templates/` (no CLAUDE.md, no
-caches), `SHA256SUMS` (every file but itself). Version = `cmr.__version__`.
+caches), `demo/make_spot.py` + `demo/values_fictional.yaml` (copied from `tests/slate/` at build
+time: the test script is the single source, no second copy in git), `SHA256SUMS` (every file but
+itself). Version = `cmr.__version__`.
 - The wheel is built offline: `pip wheel --no-deps --no-index --no-build-isolation` in a temp
   COPY of pyproject/src/profiles (no build/ or egg-info in the repo). Needs setuptools + wheel
   for `--python` (here `/usr/bin/python3`: setuptools 78.1, wheel 0.42; the pyenv `python3`
@@ -30,16 +36,19 @@ caches), `SHA256SUMS` (every file but itself). Version = `cmr.__version__`.
 
 ## install.sh
 Flags: `--prefix DIR` (default `~/.local/share/cmr`), `--workspace DIR` (default
-`~/cmr-workspace`), `--bin-dir DIR` (launcher folder, default `~/.local/bin`; a re-run,
+`~/cmr-workspace`), `--no-demo` (no demo spots, no Pillow/numpy; NOT remembered, like
+`--no-slate`), `--bin-dir DIR` (launcher folder, default `~/.local/bin`; a re-run,
 `--upgrade` or `--uninstall` of the same prefix reuses the previous `--workspace`/`--bin-dir`
-from install-state unless given again), `--no-slate`, `--upgrade`, `--uninstall`, `--bootstrap-conda`,
+from install-state unless given again), `--no-slate`, `--use-system-ffmpeg` (NOT remembered:
+give it on every run), `--upgrade`, `--uninstall`, `--bootstrap-conda`,
 `--offline-dir DIR` (hook only: exits 2 "planned"), `-y/--yes`, `-n/--dry-run`, `-h`.
 Exit: 0 done, 1 failed (log kept), 2 usage / unsupported platform / root, 3 cancelled.
 
-Layout: `<prefix>/env` (ONE conda env: python, cmr, tesseract and, only when the system ffmpeg
-fails the test, conda-forge ffmpeg 7.1.1), `<prefix>/ffmpeg-bin/{ffmpeg,ffprobe}` (symlinks to the
-chosen binaries: the system ones or `<prefix>/env/bin/*`),
-`<prefix>/install-state` (key=value: version, ffmpeg_mode, ffmpeg, slate, workspace, bin_dir,
+Layout: `<prefix>/env` (ONE conda env: python, cmr, tesseract and conda-forge ffmpeg 7.1.1; no
+ffmpeg only with `--use-system-ffmpeg` and a system ffmpeg that passes the test),
+`<prefix>/ffmpeg-bin/{ffmpeg,ffprobe}` (symlinks to the chosen binaries: `<prefix>/env/bin/*` or,
+opt-in, the system ones),
+`<prefix>/install-state` (key=value: version, ffmpeg_mode, ffmpeg, slate, demo, workspace, bin_dir,
 conda, installed = time of the last run), `<prefix>/.cmr-install-prefix` (marker), `<prefix>/conda`
 (only after a Miniforge bootstrap), launcher `~/.local/bin/cmr`, log
 `${XDG_CACHE_HOME:-~/.cache}/cmr/logs/install.log` (D29 line style, component `install`,
@@ -49,9 +58,12 @@ output and the self-test console report: nothing private beyond paths, checked o
 Steps: 1 platform (Linux x86_64 and macOS arm64; Intel Macs and Rosetta refused, exit 2),
 root refused, bundle complete + `sha256sum -c SHA256SUMS` (or `shasum -a 256 -c`),
 prefix/launcher not foreign, install mode, free space (`df -Pk` of the nearest existing
-ancestor: 3072 MB with slate, 2048 MB without, 512 MB for an update; ESTIMATES) -> 2 conda ->
+ancestor: 3072 MB with slate, 2048 MB without, 512 MB for an update, 1024 MB for an update
+that adds ffmpeg to an env without it (no `--use-system-ffmpeg`); +512 MB when demo spots are
+still to be made for this workspace; ESTIMATES) -> 2 conda ->
 3 ffmpeg -> 4 network (`curl -I` conda.anaconda.org; skipped without curl) -> 5 env -> 6 wheel
--> 7 launcher + links -> 8 workspace -> state -> 9 verify -> summary + PATH hint + policy text.
+-> 7 launcher + links -> 8 workspace -> state -> 9 verify -> 10 demo spots -> summary + PATH
+hint (with the first-check command when demo spots exist) + policy text.
 
 Decisions (installer-local; the main thread may lift them into the root CLAUDE.md):
 - **Channels:** every conda call is `--override-channels -c conda-forge` (never Anaconda
@@ -74,25 +86,37 @@ Decisions (installer-local; the main thread may lift them into the root CLAUDE.m
   unversioned `releases/latest/download/Miniforge3-<platform>.sh.sha256` does not exist (404,
   checked 2026-10-26), so the old URL could never have verified. Bump the pin on purpose.
   `conda create` adds `--no-default-packages` (ignores `.condarc` `create_default_packages`).
-- **ffmpeg acceptance:** first `ffmpeg`/`ffprobe` on PATH OUTSIDE the prefix and `~/.local/bin`;
-  both `-version` >= 5.1 (first line `<name> version [n]X.Y...`; git builds `N-...` =
-  unreadable = rejected) and `ffmpeg -hide_banner -filters` (same parsing as
-  `engine.available_filters`) lists every filter of `required_filters.txt`. Pass: system
-  binaries are linked and used ("not touched"). Fail: `ffmpeg=7.1.1` from conda-forge goes into
-  `<prefix>/env` with everything else (create-time on a new install, `conda install` into the
-  env on a later run) and `ffmpeg-bin` points at `<prefix>/env/bin`. Re-evaluated on every run (a
-  system ffmpeg that turns bad gets ffmpeg added to the env; a good one again wins, the env
-  ffmpeg stays unused). ffmpeg 7.1 LTS is the pinned line (user decision 2026-10-26; 9.1 LTS
-  later). History: the first installer pinned 6.1 and needed a SEPARATE `<prefix>/ffmpeg-env`,
+- **ffmpeg: pinned 7.1.1 by default (user decision 2026-10-26):** all machines (Rocky and Mac)
+  must run the SAME ffmpeg so results are comparable (Rocky's system 5.1.10 gave false colour-tag
+  WARNs: ffprobe 5.1 reports color_transfer/primaries `unknown` on ProRes where 7.1 reports
+  bt709). So a run without `--use-system-ffmpeg` always puts `ffmpeg=7.1.1` (the `# cmr:ffmpeg`
+  line of environment.yml; the printed version `FF_PIN` is read from that line) into
+  `<prefix>/env` and links `ffmpeg-bin` to `<prefix>/env/bin`; the system ffmpeg is not even run
+  (only reported as "not used and not touched" when one is on PATH). An install that used the
+  system ffmpeg gets ffmpeg added to its env on the next plain run (counted as "newly needed",
+  so also on a same-version re-run, no pip reinstall), prints "The previous install used the
+  system ffmpeg ...; switching to 7.1.1", and the free-space check asks 1024 MB for it.
+- **`--use-system-ffmpeg` (opt-in, not remembered):** the old acceptance test. First
+  `ffmpeg`/`ffprobe` on PATH OUTSIDE the prefix and `~/.local/bin`; both `-version` >= 5.1 (first
+  line `<name> version [n]X.Y...`; git builds `N-...` = unreadable = rejected) and `ffmpeg
+  -hide_banner -filters` (same parsing as `engine.available_filters`) lists every filter of
+  `required_filters.txt`. Pass: system binaries are linked and used ("not touched") and a
+  WARNING says results may differ from the tested 7.1.1 (printed for every accepted system
+  ffmpeg, even a 7.1.x one: another build). Fail: a WARNING with the reason, then 7.1.1 is
+  installed into the env as in the default (no exit). Re-evaluated on every run; with the flag a
+  good system ffmpeg wins again and the env ffmpeg stays unused. `cmr doctor` (src/cmr/cli.py
+  `untested_ffmpeg_note`) prints a WARNING line, never a problem, when ffmpeg or ffprobe is not
+  7.1.x. ffmpeg 7.1 LTS is the pinned line (9.1 LTS later). History: the first installer pinned 6.1 and needed a SEPARATE `<prefix>/ffmpeg-env`,
   because conda-forge ffmpeg 6.1.x needs libxml2 < 2.14 while tesseract 5.5.x (libarchive) needs
   libxml2-16 >= 2.14 (LibMambaUnsatisfiableError, first real run); 7.1.1 solves with libxml2
-  2.15.4 next to tesseract 5.5.2.
+  2.15.4 next to tesseract 5.5.2. Until 2026-10-26 a good system ffmpeg was used by default.
 - **Migration from the ffmpeg-env layout** (only our own sandbox test installs had it): when
-  `<prefix>/ffmpeg-env` exists, a run of this installer adds ffmpeg to `<prefix>/env` if the
-  system ffmpeg fails (counted as "newly needed", so it also happens on a same-version re-run),
+  `<prefix>/ffmpeg-env` exists, a run of this installer adds ffmpeg to `<prefix>/env` (default,
+  or with `--use-system-ffmpeg` when the system ffmpeg fails; counted as "newly needed", so it also happens on a same-version re-run),
   switches the links, then removes `ffmpeg-env` (after the links are rewritten, so a failed conda
   call leaves the old layout working) and logs/prints "Migrated: removed the old separate ffmpeg
-  environment". With a good system ffmpeg the unused ffmpeg-env is just removed. Real run: the
+  environment". With `--use-system-ffmpeg` and a good system ffmpeg the unused ffmpeg-env is
+  just removed. Real run: the
   `conda install` into an env made by the old installer only ADDED packages (nothing updated or
   downgraded, libxml2 unchanged), 14 s.
 - **Launcher** (`/bin/sh`, marker line `# CheckMyRender launcher (generated by install.sh)`):
@@ -147,6 +171,58 @@ Decisions (installer-local; the main thread may lift them into the root CLAUDE.m
   base conda's `pkgs/` (here `~/anaconda3/pkgs`, writable), which the free-space check does
   not look at (it checks the prefix's file system only).
 
+## Demo spots (user decision 2026-10-26: the installer generates them; real runs the same day)
+First-run flow: install -> copy `<workspace>/templates/starter` -> a clean demo spot is already in
+its `media/` -> `cmr check media/*.mov` passes in seconds -> swap in a spot with planted errors ->
+then the user's own video.
+- Packages: `pillow`, `numpy` (`# cmr:demo`, unpinned; real runs got pillow 13.0.0, numpy 2.5.4)
+  only without `--no-demo`; cmr itself never imports them. Re-run: missing when
+  `<env>/conda-meta/{pillow,numpy}-[0-9]*.json` is absent (counts as "newly needed": an older
+  install or a `--no-demo` install gets them added on a plain re-run, no pip reinstall).
+- Step 10 (after the self-test, so a broken install never generates): runs
+  `env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 PATH=<prefix>/ffmpeg-bin:$PATH
+  <env>/bin/python <bundle>/demo/make_spot.py TMP/main --short` and `... TMP/typo --short
+  --defect client_typo` into `<workspace>/.cmr-demo-tmp.XXXXXX` (same file system: files are
+  moved, not copied), output to the log. Placed (never over an existing file):
+  `demo_spots/clean/<clean>.mov`; `templates/starter/media/<clean>.mov` (HARD LINK to the
+  demo_spots copy, `cp -p` when linking fails); `demo_spots/errors/many_errors/<..._1280x720_Slated>.mov`
+  + its `manifest.yaml` (all ERRORS_SET defects); `demo_spots/errors/client_typo/<clean name>.mov`
+  + `manifest.yaml`. values.yaml is not kept.
+- Record `<workspace>/.cmr-demo-files` (workspace-relative paths of what was placed). When it
+  exists, step 10 does nothing ("Already created before"), also with `--upgrade` and a new
+  version: a demo file the user deleted or moved is never made again (delete the record to
+  get them back). The demo media are NOT templates: not in `.cmr-installed-files`, never
+  updated or hashed; `templates/starter/media/README.txt` stays a normal template file.
+- Failure (generator exit != 0, e.g. no font): WARNING with the generator's last line, "Run the
+  installer again to retry, or make them by hand: mkdir -p ~/cmr-demo && PATH=<ffmpeg-bin>:$PATH
+  <env>/bin/python <bundle>/demo/make_spot.py ~/cmr-demo --short", plus the CMR_TEST_FONT hint;
+  no record written, install exits 0. A bundle without `demo/make_spot.py` only warns.
+- `make_spot.py` refuses an OUTDIR inside the repo only when `<parents[2]>/pyproject.toml`
+  exists (in a bundle, parents[2] is the folder the bundle was unpacked in, which may hold
+  the workspace).
+- Uninstall keeps the workspace incl. demo spots and says so.
+- Fonts: the generator uses system fonts (DejaVu / DejaVuLGC on Rocky 9 / Arial on macOS; the
+  env's conda fonts are mono only and were not tried for OCR). A machine without any of them
+  gets the warning; `CMR_TEST_FONT`/`CMR_TEST_FONT_REGULAR` fix it.
+Real runs 2026-10-26 (own sandbox folders, removed afterwards; Rocky with XDG_CACHE_HOME and
+CONDA_PKGS_DIRS in the sandbox, Mac with a throwaway HOME + Miniforge via CONDA_EXE):
+| | Rocky 9.7 (48 cores) | Mac Studio M1 Ultra |
+|---|---|---|
+| install with demo, cold package cache | 58 s (demo step 9 s) | 123 s (demo step 16 s) |
+| install `--no-demo`, warm cache | 15 s | 44 s |
+| env with demo / `--no-demo` (`du -sm`) | 1235 / 1137 MB | 905 / 844 MB |
+| demo media (3 spots, starter copy hard-linked) | 176 MB (63 + 57 + 63 MB) | 174 MB |
+| re-run (idempotent, nothing generated, mtimes unchanged) | 7 s | 3 s |
+Acceptance on both (same results): starter copy `cmr check media/*.mov` PASS 27/SKIPPED 1 exit 0
+(5-6 s); `--job job_no_slate.yaml` PASS 22/SKIPPED 1 exit 0; client_typo `FAIL slate.content:
+slate CLIENT 'Sample Bugrers'` PASS 26/SKIPPED 1/FAIL 1 exit 2; many_errors `--profile
+spot_review` PASS 17/SKIPPED 1/WARN 6/FAIL 13, with job.yaml rules WARN 1/FAIL 18, exit 2;
+`env -i HOME=.. PATH=/usr/bin:/bin` (+ junk PYTHONPATH/PYTHONHOME) launcher run PASS exit 0;
+`--no-demo` env has no pillow/numpy and the workspace no demo files; real `--dry-run` prints
+the generator commands and placements and writes nothing; `--uninstall` prints the demo note.
+Note: conda adds every env made by a non-sandboxed HOME to `~/.conda/environments.txt` (the two
+test lines on Rocky were removed again).
+
 ## macOS (D32; ported 2026-10-26, real run on the Mac the same day)
 - install.sh runs on bash 3.2: no `declare -A` (state read by `old KEY`, awk), no `mapfile`
   (while-read loops), empty arrays as `${a[@]+"${a[@]}"}`, `date +%3N` only where GNU date
@@ -178,15 +254,18 @@ Decisions (installer-local; the main thread may lift them into the root CLAUDE.m
   A bash:3.2 container (docker, musl/busybox) was used for templates/automation/overnight_qc.sh
   only; the Mac run is the stronger bash 3.2 test for the installer.
 
-## Tests (`tests/installer/test_installer.py`, 70)
+## Tests (`tests/installer/test_installer.py`, 83)
 Run alone: `PYTHONPATH=src /usr/bin/python3 -m pytest -q tests/installer` (~10 s). Every run uses a
 temp HOME and a PATH of symlinked coreutils + fakes; the real conda/ffmpeg are unreachable.
 Covered: syntax (shellcheck when installed: not on the dev machine), help/bad args/root/prefix
 refusals/offline hook, unsupported OS incl. Intel Mac and Rosetta (nothing created), macOS arm64
 fake install (log in ~/Library/Logs/cmr, ~/.zprofile hint, MacOSX-arm64 Miniforge), dry run (nothing written, conda only
-`--version`, every action printed, launcher preview), `--no-slate`, ffmpeg acceptance (10 cases:
-6.1.1, 5.1.10, n6.0, distro suffix, 5.0, 4.4, git build, old ffprobe, missing filters, absent)
-and the own-prefix exclusion, conda discovery order + broken conda skipped, missing conda
+`--version`, every action printed, launcher preview), `--no-slate`, default = pinned 7.1.1 even with a good system
+ffmpeg (6.1.1, 7.1.1, 5.1.10 on PATH; the system ffmpeg is never run), `--use-system-ffmpeg`
+acceptance (10 cases: 6.1.1, 5.1.10, n6.0, distro suffix, 5.0, 4.4, git build, old ffprobe,
+missing filters, absent; accepted = warning, rejected = warning + 7.1.1) and the own-prefix
+exclusion, a system-ffmpeg install re-run without the flag gets 7.1.1 added (no pip, next run
+nothing; with the flag nothing changes) and its 1024 MB free-space check, conda discovery order + broken conda skipped, missing conda
 message (exit 3), Miniforge bootstrap dry-run / checksum ok / mismatch (not run), free space
 (slate / no-slate / ok), tampered bundle, incomplete bundle, network failure, conda failure (log
 kept), foreign prefix / launcher, doctor failure, full fake install (conda/pip command lines,
@@ -194,14 +273,21 @@ launcher content, symlinks, CMR_TESSERACT and ffmpeg seen by cmr, PYTHONPATH uns
 without CLAUDE.md, state, PATH hint, D29 log lines), env ffmpeg + no slate, prefix with a quote,
 idempotent re-run (no conda/pip, edited files kept, missing file restored), `--upgrade`, new
 version upgrade (unedited workspace files updated, edited kept, record survives uninstall),
-ffmpeg turning bad on re-run (ffmpeg added to the same env, next run nothing, good system ffmpeg
-wins again), env ffmpeg + tesseract in ONE env (the fake conda still refuses ffmpeg=6 + tesseract
+ffmpeg turning bad on a `--use-system-ffmpeg` re-run (ffmpeg added to the same env, next run
+nothing, good system ffmpeg wins again with the flag), env ffmpeg + tesseract in ONE env (the fake conda still refuses ffmpeg=6 + tesseract
 like the real solver: guard against a regression of the pin), environment.yml pins
 `ffmpeg=7.1.1`, migration from the ffmpeg-env layout (dry run, into env, system ffmpeg good,
 conda failure keeps the old layout), macOS launcher TMPDIR (unset -> getconf, set -> kept, no
 getconf -> unset), `--bin-dir` (+ workspace) remembered by re-run/uninstall,
-USERGUIDE.md/README.md in the workspace, incomplete env recreated, uninstall (cancel, EOF,
-dry-run, yes, foreign prefix, foreign launcher kept), bundle builder (file list, no CLAUDE.md,
+USERGUIDE.md/README.md in the workspace, demo spots (on by default: files, record, not in the
+template record, temp folder removed, generator run with cmr's ffmpeg and a clean PYTHONPATH;
+`--no-demo` then a plain re-run adds pillow/numpy and generates; dry run; idempotent re-run and
+`--upgrade` do not regenerate a deleted file or touch an edited one; an existing file is never
+overwritten; a failing generator warns, exits 0 and a re-run retries; bundle without the
+generator warns; uninstall keeps them; the fake python plays the generator, the fake conda writes
+conda-meta records), incomplete env recreated, uninstall (cancel, EOF,
+dry-run, yes, foreign prefix, foreign launcher kept), bundle builder (file list incl.
+`demo/make_spot.py` byte-identical to tests/slate, no .mov, no CLAUDE.md,
 SHA256SUMS complete and valid, tarball .sha256, filters = package list, wheel has profiles,
 mismatched wheel rejected, repo not polluted) and the REAL built bundle through the installer
 with fakes.
@@ -223,7 +309,7 @@ lands in the real `~/anaconda3/pkgs`), `nice -n 15`, `ulimit -v 40000000`; real 
    conda-forge ffmpeg 6.1.2 in ffmpeg-env, doctor OK, self-test and slate quick start PASS; the
    next run with the normal PATH switched back to the system ffmpeg. PASS.
 5. tesseract 5.5.2 / leptonica 1.87.0 (after the pin), `--list-langs` 125 incl. eng, without
-   TESSDATA_PREFIX. Slate quick start (templates/quickstart + make_spot `--short`) with the
+   TESSDATA_PREFIX. Slate quick start (templates/quickstart, now templates/starter, + make_spot `--short`) with the
    installed cmr: clean spot `RESULT PASS (exit 0): PASS 27, SKIPPED 1`; `--defect client_typo`:
    `WARN slate.content: slate CLIENT 'Sample Bugrers'`, exactly as in the guide. PASS.
 6. Self-test ok (exit 2 = findings, report written); PATH hint printed (sandbox bin not on PATH).
@@ -315,8 +401,9 @@ Issues found and fixed (each with a regression test):
    src/cmr/checks/slate/reader.py (outside the installer).
 2. `--no-slate` free-space estimate 1.5 GB was too tight for the env-ffmpeg case (765 MB env +
    cache) -> 2 GB (`test_free_space_check`).
-Not installer issues: make_spot.py refuses an output folder under the parent of its own
-`tests/` folder (copy it as `<dir>/tests/slate/make_spot.py`); the Mac test run needs
+Not installer issues: make_spot.py refused an output folder under the parent of its own
+`tests/` folder (copy it as `<dir>/tests/slate/make_spot.py`; since the demo-spot change the
+guard applies only when that parent holds a `pyproject.toml`); the Mac test run needs
 `src/cmr/__init__.py` next to `tests/` for `test_build_rejects_mismatched_wheel`.
 
 ## Still UNVERIFIED
@@ -335,8 +422,9 @@ Not installer issues: make_spot.py refuses an output folder under the parent of 
 2. `conda create` from conda-forge only succeeds; no ToS prompt; time and env size noted.
 3. `pip install --no-deps --no-index` + `pip check` clean; `cmr profiles list` lists the stock
    profiles (installed-package profile lookup, `config.stock_profiles_dir()`).
-4. System ffmpeg 5.1.10 accepted (expected) and the launcher uses it; also force the env path
-   once (e.g. a PATH without /usr/bin ffmpeg) and confirm conda-forge ffmpeg 7.1.1 passes doctor.
+4. Default: conda-forge ffmpeg 7.1.1 in the env, the launcher uses it, doctor OK without the
+   "not the tested version" WARNING. Once with `--use-system-ffmpeg`: system 5.1.10 accepted
+   with the warning, doctor prints the WARNING lines; a re-run without the flag adds 7.1.1.
 5. tesseract: `--version` 5.5.x, `--list-langs` has eng, the slate media tests pass with
    `CMR_TESSERACT=<prefix>/env/bin/tesseract`.
 6. Self-test passes; `cmr doctor` OK; `~/.local/bin` on PATH on Rocky (bash profile) or the hint.
@@ -349,7 +437,6 @@ Not installer issues: make_spot.py refuses an output folder under the parent of 
 
 ## Known limits / later
 Offline cache (`--offline-dir`: conda `--offline` + a `file://` channel built by
-build_bundle.sh), a `--force-env-ffmpeg` switch if
-wanted, free-space check of conda's `pkgs/` file system, `installed=` in the state is the last
+build_bundle.sh), free-space check of conda's `pkgs/` file system, `installed=` in the state is the last
 run, not the first install; the 512 MB update estimate does not cover adding ffmpeg to an
 existing env (~0.7 GB); the migration code (`OLD_FFENV`) can go once no ffmpeg-env install exists.

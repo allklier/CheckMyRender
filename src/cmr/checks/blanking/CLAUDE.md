@@ -134,12 +134,22 @@ Features per hit (evidence[0], plus `context`, `context_version`, `window`, `hit
 `context_band_frames`, `depth_min/max`, `depth_motion_px`, `moving_steps`, `monotone`,
 `velocity_px`, `trend_r2`, `symmetry` / `opposite_band` (opposite edge banded with similar
 depth on the hit frames), `cut_distance`, `dissolve_distance`, `dissolve_share`, `cuts`,
-`onset_jump`, `reason` (unknown). `finding.verifier` = {name blanking.context, version 1,
+`onset_jump`, `cut_onset`, `cut_end`, `animation_guard`, `reason` (unknown). `finding.verifier` = {name blanking.context, version 2,
 decision, p null, model_hash null, severity, lowered}; `Finding.lower_to` only (raw kept).
 Rules, in this order:
 1. animation: band on >= 3 context frames (run through the hit, stopping at cuts/dissolves),
    depth moves >= 3 px, >= 2 moving steps, >= 80 % of them in one direction (steps < 1 px are
-   repeats: 3:2 pulldown gives a zero step every 5th frame), straight-line R^2 >= 0.8.
+   repeats: 3:2 pulldown gives a zero step every 5th frame), straight-line R^2 >= 0.8, AND no
+   guard (context v2, user labels, see "User labels" below): `cut_onset` = the band run starts
+   <= `context_cut_onset_frames` (2) frames after a cut and the band is new there (no band on
+   the frame before the cut, or a depth differing by > max(2 px, 50 %)); `cut_end` (mirror,
+   user decision) = the band run ends <= `context_cut_end_frames` (2) frames before a cut and
+   is gone on the cut frame (or its depth differs by > max(2 px, 50 %)); `fast_move` = median
+   depth step (`velocity_px`) > `context_max_velocity_px` (8 px/frame). Evidence `cut_onset`
+   (frames after the cut or null), `cut_end` (frames before the cut or null) and
+   `animation_guard` (list) record it. A guarded hit falls through to the other rules; a hit
+   whose band MOVES like an animation and is cut-guarded (`cut_onset`/`cut_end`) skips the
+   cut branch of rule 2 (it is not a field-mixed cut frame), the dissolve branch still applies.
 2. transition: onset jump <= 8 AND (hit <= 2 frames within 2 frames of a cut, OR >= 50 % of
    the hit frames within 2 frames of a dissolve/fade). Cut = local frame-difference spike
    (>= 12 and >= 4 x the median of +-12 frames). Dissolve = mean |Y(t+4)-2Y(t)+Y(t-4)| /
@@ -163,9 +173,10 @@ report; visual checks of strips):
   <= 0.30, median 1.22.
 - Onset jump of the outer line into the hit: real dissolve/fade hits 0-6; masks planted into
   real dissolves and at cuts 19-49 (hence 8).
-- Ken Burns tracks (real): 33 27 27 21 15 9 5 5 1 0; 2 3 3 5 7 9 11 11 12 14 (both bars);
-  slow 1 1 2 5 6 6 6 7 7 8 8 8 9 (R^2 0.8-0.99); field split of real ~49 % hits: none (the
-  ~49 % coverage is picture content, not one field).
+- Moving-band tracks (real): mid-shot 2 3 3 5 7 9 11 11 12 14 (both bars, no cut); slow
+  1 1 2 5 6 6 6 7 7 8 8 8 9 (R^2 0.8-0.99); field split of real ~49 % hits: none (the ~49 %
+  coverage is picture content, not one field). The track 33 27 27 21 15 9 5 5 1 0, first read
+  as a Ken Burns, starts at a cut and was labelled a DEFECT by the user (see "User labels").
 Tests: `tests/unit/test_blanking_context.py` (canned depth tracks: Ken Burns, pulldown,
 steady, erratic, dissolve with gradual vs abrupt onset, cut rules, run stops at cuts, symmetry,
 fast widening, transitions on synthetic samples, frame features, driver with a faked decode:
@@ -193,6 +204,78 @@ Cannot be separated: a mask error that moves with a Ken Burns (an animated resiz
 animation; a mask switched on at a dark edge during a fade (onset jump small) = transition; a
 1-frame band at a cut that switches on abruptly stays FAIL (a field-mixed cut frame would too,
 none seen); dark moving picture at an edge with a straight-line depth trend = animation.
+
+### User labels (2026-10-26) and the animation guards (context v2)
+The user labelled 30 review sheets of the long-form master (private suite stills/pbs_blanking/
+labels.yaml): 4 `defect`, 6 `intended_transition`, 19 `cant_tell` (hard to see, possibly a
+single dark line), 1 unlabelled. "Real issues were very obvious failures."
+- All 4 defects had been LOWERED FAIL -> INFO as `animation` (the D9 promise broken on real
+  material; the synthetic planted masks never moved, so they never tested this). Shapes
+  (features only): (a) band 33 px from the frame after a cut, shrinking to 0 in 8 frames
+  (onset 1 frame after the cut, R^2 0.96, monotone 1.0); (b) previous shot pillarboxed (~148
+  px), cut, band grows 1 -> 36 px on both sides (onset 0); (c, d) mid-shot, no cut detected
+  (the move runs through, frame differences ~12 every frame): band appears and grows 4 -> 123
+  and 14 -> 108 px in ~9 frames (median step 17 / 14.5 px), outer-line jump ~170, then holds.
+- Signature (user insight): an image cut in and animated whose first keyframe was set too loose:
+  black shows at or right after the cut for a few frames, then the move covers it (or the
+  reverse: a band opens right after the cut). Real Ken Burns moves are long, start smoothly from
+  ~0 and are not tied to a cut onset. (c, d) are not tied to a detected cut; their separating
+  feature is speed: 14-17 px/frame vs <= 6 for every hit still classed animation.
+- Guards (rule 1 above): `cut_onset` (<= 2 frames after a cut, band new there) and
+  `fast_move` (> 8 px/frame). Measured on the 20 excerpts (203 stage-1 hits, quality high,
+  offline re-classification of the same decoded features): animation 24 -> 13; the 11 that lost
+  it: the 4 defects + 3 more hits of the same two events (the matte part of (a), the right side
+  and a later dark_edge of (b)), a deep band (108 px) at a cut shrinking to 0 in 15 frames on
+  both sides (2 hits, unlabelled; same signature), a matte at a cut shrinking 115 -> 43 px
+  (`cant_tell`, WARN stays WARN), a fast erratic shrink ending in a lingering 1 px line
+  (unlabelled). Remaining animation: slow mid-shot moves (<= 4 px/frame), bands that shrink to 0
+  1-3 frames BEFORE a cut (the end of a move; 2 `cant_tell`, kept INFO), the mid-shot reveal
+  2 3 3 5 ... to 77 px pillars. Lowered: edge 22 -> 16, dark_edge 10 -> 7, matte 5 -> 3; FAIL
+  129 -> 138, INFO 37 -> 26, WARN 37 -> 39. Transition lowerings are unchanged (the guards
+  apply to rule 1 only). (Numbers of this first step; the `cut_end` mirror below supersedes
+  the "shrink to 0 before a cut" part and the totals.)
+- Labelled outcome: 4/4 defects stay at FAIL (before: 4 INFO); 6/6 `intended_transition` stay
+  as before (2 matte WARN, 4 FAIL; none lowered); `cant_tell`: 18 unchanged, 1 (the matte at a
+  cut) INFO -> WARN.
+- Mirror guard `cut_end` (user decision, same day): a band that ENDS <= 2 frames before a cut
+  and is gone after it stays at raw severity, so onset and end at a cut are treated alike.
+  Without the cut-branch exclusion above the two `cant_tell` 1-frame hits at the end of a
+  shrink (13 -> 1 and 14 -> 1 px, cut 2 / 1 frames later) fell into the cut transition
+  rule and stayed INFO; with it they are steady FAIL. Effect on the 203 excerpt hits (vs the
+  first guards): 7 more hits lose animation, all `cut_end`: 6 hits of one event (top, bottom
+  and right bands shrinking to 0 1-3 frames before a cut: 4 dark_edge/edge INFO -> FAIL
+  unknown, the 2 `cant_tell` INFO -> FAIL steady) and one 77 px pillar matte that runs up to a
+  cut (INFO -> WARN). No transition changed. Animation 24 -> 6 overall (left: slow mid-shot
+  moves and reveals that end well before a cut). Lowered: edge 22 -> 13, dark_edge 10 -> 4,
+  matte 5 -> 2; FAIL 129 -> 144, WARN 37 -> 40, INFO 37 -> 19. Labelled: 4/4 defects FAIL,
+  `intended_transition` unchanged, `cant_tell` 16 unchanged, 3 raised (the matte at a cut
+  INFO -> WARN, the two shrink-to-cut hits INFO -> FAIL). Planted regression identical
+  (high 139 raw FAIL -> 138, fast 136 -> 133; same lowered planted hits as before).
+- `intended_transition` items were NOT lowered (no principled signal): two are dark picture
+  content at the top edge (a dark album page; luma <= black_luma runs follow the picture, not a
+  straight line), two are dark title cards with flares (deep, erratic bands), two are a 1 px
+  dark line next to dark picture for 25 / 164 frames (constant depth: exactly the mask-error
+  signature). A band "straightness" feature (share of banded lines within +-1 px of the
+  median depth) was measured: the two dark-page hits 0.12-0.13, defects 0.95-1.0, but the two
+  1 px items 0.88-0.90 and dozens of unlabelled steady sharp-edge hits 0.004-0.05, so it does
+  not separate the labels and was not adopted. Open: the 1 px dark lines are hard to see
+  (low contrast); a visibility measure (step from line to picture) would be a stage-1 rule
+  change, not context.
+- Planted regression (6 excerpts x 28 planted masks on real texture, re-encoded H.264,
+  planted again 2026-10-26 at slightly different start frames than the first study): high 168
+  planted, 139 raw FAIL -> 138 final FAIL; fast 136 -> 133; identical before and after the
+  guards (one fast hit moved animation -> transition, still INFO). The lowered ones are a known
+  gap, unchanged: masks planted inside a fade from black at an already black edge (onset jump
+  0-4) read as transition. Synthetic gen_media / gen_context tests unchanged and green.
+- Expected effect on the full high run of the master (297 blanking hits: 156 edge FAIL, 51
+  dark_edge FAIL, 90 matte WARN before stage 2): the 203 excerpt hits gave +15 FAIL, -18 INFO,
+  +3 WARN (both cut guards and fast_move); the 94 hits outside the excerpts were not
+  re-measured (estimate: a few more in the same direction).
+- Tests: tests/unit/test_blanking_context.py (the four defect shapes, the old "band grows after
+  a cut = animation" test inverted, slow mid-shot reveal still animation, a band continuing
+  across a held-frame cut is not cut_onset / cut_end, the two shrink-to-cut shapes stay steady,
+  a shrink ending well before a cut is still animation, an unmoving 1-frame band at a cut is
+  still a transition, thresholds as params).
 
 ### Known gaps
 - Hard case, cannot be separated by a per-pixel rule: a real 1px black line (Y 16) next to

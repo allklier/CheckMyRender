@@ -1,0 +1,66 @@
+# =====================================================================================
+# SPEC SHEET - starter folder: HD broadcast ad spot (technical facts of ONE deliverable)
+# =====================================================================================
+# A spec sheet says what the delivered file must BE: codec, picture size, frame rate,
+# colour tags, head layout, timecode, length, audio. The profile (named in job.yaml)
+# says which checks run and how strict they are; job.yaml holds the job data (client,
+# Ad-ID, deliverables list, slate template). cmr compares the file against every value
+# here and names each field that differs, e.g.
+#     FAIL video.resolution: width expected 1920, got 3840
+#
+# As shipped, these values match the generated DEMO spot (tests/slate/make_spot.py
+# --short): a 3 s program so the demo file stays small. A real spot differs; the lines
+# marked EDIT are the ones you usually change (see README.md, "Your own video").
+# Edit a COPY in your own job folder, not this file in the templates folder.
+#
+# Values are an EXAMPLE of a common short-form ad delivery (5 s slate, 2 s black,
+# content at 01:00:00:00, no tail). Take the real numbers from the broadcaster's or
+# ad-delivery platform's current spec document.
+# =====================================================================================
+spec_version: 1                      # always 1
+
+video:
+  container: mov                     # EDIT: mov (QuickTime) | mxf | mp4
+  codec: prores                      # EDIT: prores | dnxhd | h264 | hevc (ffprobe codec names)
+  codec_profile: "422 HQ"            # EDIT: ProRes "422 HQ" | "422" | "422 LT" | "422 Proxy" | "4444" | "4444 XQ"
+  width: 1920                        # EDIT: picture width in pixels (UHD: 3840)
+  height: 1080                       # EDIT: picture height in pixels (UHD: 2160)
+  fps: "30000/1001"                  # EDIT: exact fraction in quotes: 29.97 = "30000/1001",
+                                     #       23.976 = "24000/1001", 25 = "25", 59.94 = "60000/1001"
+  scan: progressive                  # progressive | interlaced
+  pixel_format: yuv422p10le          # EDIT: 10-bit 4:2:2 (ProRes 422 family; the report shows the actual one)
+  color:                             # colour tags in the file (Rec.709 HD here)
+    primaries: bt709                 #   colour primaries tag
+    transfer: bt709                  #   transfer characteristic tag
+    matrix: bt709                    #   YCbCr matrix tag
+    range: tv                        #   tv = limited (16-235), pc = full range
+  aspect_ratio: "16:9"               # display aspect ratio
+  pixel_aspect: 1.0                  # square pixels
+
+timing:
+  timecode_mode: non-drop            # EDIT: non-drop | drop (as the spec document says)
+  program_start_timecode: "01:00:00:00"   # first frame of content (program)
+  # Length of the content in TIMECODE frames, exact (no tolerance in the stock profiles):
+  #   at 29.97: :15 = 450, :30 = 900, :60 = 1800      at 23.976: :30 = 720
+  program_duration_frames: 90        # EDIT: the demo spot is 3 s = 90 frames; a :30 is 900
+  head_layout:                       # what comes BEFORE the content, in order from file frame 0
+    - {type: slate, frames: 150}     # EDIT: 5 s slate (150 frames at 29.97)
+    - {type: black, frames: 60}      # EDIT: 2 s black
+    - {type: program}                # content starts here (file frame 210 = 01:00:00:00)
+                                     # no slate at all: delete the slate and black lines
+  tail_layout: []                    # nothing after the content (no tail black, no extra frames)
+                                     # e.g. 2 s tail black: [{type: black, frames: 60}]
+
+audio:
+  codec: pcm_s24le                   # uncompressed 24-bit PCM
+  sample_rate: 48000                 # Hz
+  bit_depth: 24                      # bits per sample
+  tracks:                            # EDIT: one entry per audio stream, in file order
+    - {index: 0, layout: stereo, content: "Stereo mix L/R"}   # layout: mono | stereo | 5.1
+  loudness:
+    standard: "ATSC A/85"            # EDIT: "ATSC A/85" (-24 LKFS, US) | "EBU R128" (-23 LUFS);
+                                     #       the numbers live in the profile
+    program_track: 0                 # which audio stream is measured (index above)
+
+content:
+  captions: {required: false}        # true = embedded captions must be present

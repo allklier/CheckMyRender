@@ -1,0 +1,29 @@
+# =====================================================================================
+# JOB FILE - starter folder, WITHOUT slate reading (no slate template, no deliverables CSV)
+# =====================================================================================
+# The same job as job.yaml, checked on its technical facts only: codec, size, frame rate,
+# colour tags, head layout, timecode, length, audio format, loudness, silence, clipping,
+# blanking, black runs, decode errors and the filename. Nothing needs tesseract (OCR).
+#
+#   cmr check media/*.mov --job job_no_slate.yaml
+#
+# Use it when the render has no slate, when the slate does not matter yet, or when you
+# have no deliverables list. A render WITHOUT a slate picture also needs the head layout
+# in the spec changed (spec_starter.yaml: delete the slate and black lines of head_layout).
+# Paths are relative to THIS file. An option on the command line always wins.
+# All names below are fictional; they match the demo spot (tests/slate/make_spot.py --short).
+# =====================================================================================
+job_version: 1                       # always 1
+
+spec: spec_starter.yaml              # the same technical spec sheet as job.yaml
+profile: release                     # stock profile: strict delivery rules, no slate checks
+                                     #   (review = faster review pass, problems mostly warn)
+waivers: waivers.yaml                # accepted findings (shared with job.yaml: same job id)
+output: reports                      # JSON reports go here (cmr_report_latest.json + one per run)
+
+job:
+  id: demo_sb_league                 # EDIT: short job id (letters, digits, _ - .): on waivers and reports
+  # The expected filename. {name} = a value of this job: section; write fixed text as is.
+  # Delete both lines below to skip the filename check (it is then SKIPPED, not failed).
+  title: "SB X League 2026_ProRes Generic Submaster_QB Pat"   # EDIT: spot title as in the filename
+  naming_pattern: "{title}_03_ABCD1234567H_1920x1080_Slated.mov"   # EDIT: length, Ad-ID, size, variant

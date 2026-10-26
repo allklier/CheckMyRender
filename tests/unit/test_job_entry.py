@@ -64,7 +64,8 @@ def test_job_schema(tmp_path):
     with pytest.raises(ConfigError, match="reports"):
         job_settings(write_job(tmp_path / "c", reports="r"))               # typo: not a key
     for f in ("examples/spot_xr/job.yaml", "examples/spot_xr/job_label_colon.yaml",
-              "templates/slate/job.yaml", "templates/quickstart/job.yaml"):
+              "templates/slate/job.yaml", "templates/starter/job.yaml",
+              "templates/starter/job_no_slate.yaml"):
         assert job_settings(ROOT / f)["id"]
 
 

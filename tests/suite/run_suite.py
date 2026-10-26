@@ -192,6 +192,7 @@ def run_one(r: dict, args, suite: dict, suite_dir: Path, out_root: Path, expecte
         problems += compare.compare_expected(report, exp, res["exit"])
     base = suite_dir / "baselines" / f"{key}.json"
     if args.update_baseline:
+        base.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(rep_path, base)
         res["notes"].append("baseline updated")
     elif base.exists() and not args.meta:

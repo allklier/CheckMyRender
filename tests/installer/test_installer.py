@@ -56,6 +56,10 @@ def make_bundle(dst: Path, version: str = "0.0.1") -> Path:
     (dst / "examples" / "spec_a.yaml").write_text("a: 1\n")
     (dst / "examples" / "sub" / "b.csv").write_text("b\n")
     (dst / "examples" / "CLAUDE.md").write_text("must never reach the workspace\n")
+    (dst / "templates" / "starter" / "media").mkdir(parents=True)
+    (dst / "templates" / "starter" / "media" / "README.txt").write_text("put your video here\n")
+    (dst / "demo").mkdir()
+    (dst / "demo" / "make_spot.py").write_text("# stand-in: the fake env python plays the generator\n")
     write_sums(dst)
     return dst
 
@@ -142,7 +146,7 @@ def test_help(rig):
     p = rig.run("--help")
     assert p.returncode == 0
     for flag in ("--prefix", "--workspace", "--bin-dir", "--no-slate", "--upgrade", "--uninstall",
-                 "--bootstrap-conda", "--offline-dir", "--yes", "--dry-run"):
+                 "--bootstrap-conda", "--offline-dir", "--yes", "--dry-run", "--use-system-ffmpeg"):
         assert flag in p.stdout
 
 
@@ -184,10 +188,13 @@ def test_dry_run_changes_nothing_and_prints_actions(rig):
     o = p.stdout
     assert "DRY RUN" in o
     assert re.search(r"\[dry-run\] .*conda create -y -q -p .*/env --override-channels -c conda-forge "
-                     r"--no-default-packages python=3.12 pip pyyaml jsonschema tesseract=5.5.2 leptonica=1.87\n", o)
+                     r"--no-default-packages python=3.12 pip pyyaml jsonschema ffmpeg=7.1.1 tesseract=5.5.2 leptonica=1.87 pillow numpy\n", o)
     assert "pip install --no-deps --no-index --force-reinstall" in o
     assert "would write " + str(rig.launcher) in o
     assert "| CMR_TESSERACT=" in o and "| PATH=\"$CMR_PREFIX/ffmpeg-bin:$PATH\"" in o
+    assert "Using the pinned, tested conda-forge ffmpeg 7.1.1" in o
+    assert f"System ffmpeg {rig.sysbin}/ffmpeg is not used and not touched" in o
+    assert f"would link {rig.prefix}/ffmpeg-bin/ffmpeg -> {rig.env_dir}/bin/ffmpeg" in o
     assert "would ask" not in o
     assert "Production Python policy" in o
     # nothing written anywhere in HOME, conda only asked for its version
@@ -217,18 +224,33 @@ def test_dry_run_no_slate(rig):
     ({}, False, False, "ffmpeg/ffprobe not found on PATH"),
 ])
 def test_ffmpeg_acceptance(rig, fake, ffmpeg, accepted, why):
-    p = rig.run("--dry-run", ffmpeg=ffmpeg, **fake)
+    """--use-system-ffmpeg: the old acceptance test; a failing system ffmpeg falls back to 7.1.1."""
+    p = rig.run("--dry-run", "--use-system-ffmpeg", ffmpeg=ffmpeg, **fake)
     assert p.returncode == 0, out(p)
     pkgs = p.stdout.split("Packages (conda-forge only): ")[1].splitlines()[0]
     if accepted:
-        assert "System ffmpeg is good enough: " + str(rig.sysbin / "ffmpeg") in p.stdout
+        assert "--use-system-ffmpeg: " + str(rig.sysbin / "ffmpeg") in p.stdout
+        assert "results may differ from the tested ffmpeg 7.1.1" in p.stderr
         assert "ffmpeg" not in pkgs
         assert f"would link {rig.prefix}/ffmpeg-bin/ffmpeg -> {rig.sysbin}/ffmpeg" in p.stdout
     else:
-        assert why in p.stdout
-        assert "installing conda-forge ffmpeg into cmr's own environment" in p.stdout
-        assert pkgs.endswith("jsonschema ffmpeg=7.1.1 tesseract=5.5.2 leptonica=1.87")   # one env
+        assert why in p.stderr and "the system ffmpeg cannot be used" in p.stderr
+        assert "installing the pinned conda-forge ffmpeg 7.1.1 into cmr's own environment" in p.stdout
+        assert pkgs.endswith("jsonschema ffmpeg=7.1.1 tesseract=5.5.2 leptonica=1.87 pillow numpy")   # one env
         assert f"-> {rig.prefix}/env/bin/ffmpeg" in p.stdout and "ffmpeg-env" not in p.stdout
+
+
+@pytest.mark.parametrize("fake", [{}, {"FAKE_FF_VERSION": "7.1.1"}, {"FAKE_FF_VERSION": "5.1.10"}])
+def test_default_always_uses_pinned_ffmpeg(rig, fake):
+    """User decision 2026-10-26: every machine runs the same ffmpeg; a good system ffmpeg (even
+    7.1.1) is not used without --use-system-ffmpeg, and it is never even probed."""
+    p = rig.run("--dry-run", **fake)
+    assert p.returncode == 0, out(p)
+    pkgs = p.stdout.split("Packages (conda-forge only): ")[1].splitlines()[0]
+    assert "ffmpeg=7.1.1" in pkgs
+    assert f"would link {rig.prefix}/ffmpeg-bin/ffmpeg -> {rig.env_dir}/bin/ffmpeg" in p.stdout
+    assert "WARNING" not in p.stderr
+    assert not re.search(r"^ffmpeg ", rig.calls_text(), re.M)        # system ffmpeg not run
 
 
 def test_ffmpeg_inside_prefix_is_not_the_system_one(rig):
@@ -238,8 +260,9 @@ def test_ffmpeg_inside_prefix_is_not_the_system_one(rig):
     shutil.copy(FAKES / "ffmpeg", fake_env_bin / "ffmpeg")
     shutil.copy(FAKES / "ffmpeg", fake_env_bin / "ffprobe")
     (rig.prefix / ".cmr-install-prefix").touch()
-    p = rig.run("--dry-run", "--prefix", str(rig.prefix), ffmpeg=False, extra_path=[str(fake_env_bin)])
-    assert "ffmpeg/ffprobe not found on PATH" in p.stdout
+    p = rig.run("--dry-run", "--use-system-ffmpeg", "--prefix", str(rig.prefix), ffmpeg=False,
+                extra_path=[str(fake_env_bin)])
+    assert "ffmpeg/ffprobe not found on PATH" in p.stderr
 
 
 # --- conda discovery ------------------------------------------------------------------------
@@ -317,16 +340,19 @@ def test_bootstrap_checksum_mismatch_not_run(rig):
 
 # --- preflight failures ---------------------------------------------------------------------
 def test_free_space_check(rig):
-    p = rig.run("--yes", FAKE_DF_AVAIL_KB=1024 * 1024)       # 1 GB free, 3 GB needed
+    p = rig.run("--yes", FAKE_DF_AVAIL_KB=1024 * 1024)       # 1 GB free, 3 GB + 0.5 GB demo needed
     assert p.returncode == 1
     assert "not enough free disk space: 1024 MB free" in p.stderr and "--no-slate" in p.stderr
+    assert "about 3584 MB needed" in p.stderr and "--no-demo" in p.stderr
     assert not rig.prefix.exists()
-    p = rig.run("--yes", "--no-slate", FAKE_DF_AVAIL_KB=1024 * 1024)
+    p = rig.run("--yes", "--no-slate", "--no-demo", FAKE_DF_AVAIL_KB=1024 * 1024)
     # 2048 MB: the --no-slate env with conda-forge ffmpeg 7.1 is 765 MB + package cache (Rocky run)
-    assert p.returncode == 1 and "about 2048 MB needed" in p.stderr
-    p = rig.run("--yes", "--no-slate", FAKE_DF_AVAIL_KB=2047 * 1024)
+    assert p.returncode == 1 and "about 2048 MB needed" in p.stderr and "--no-demo" not in p.stderr
+    p = rig.run("--yes", "--no-slate", "--no-demo", FAKE_DF_AVAIL_KB=2047 * 1024)
     assert p.returncode == 1
-    p = rig.run("--yes", "--no-slate", FAKE_DF_AVAIL_KB=2048 * 1024)
+    p = rig.run("--yes", "--no-slate", FAKE_DF_AVAIL_KB=2559 * 1024)      # demo adds 512 MB
+    assert p.returncode == 1 and "about 2560 MB needed" in p.stderr
+    p = rig.run("--yes", "--no-slate", "--no-demo", FAKE_DF_AVAIL_KB=2048 * 1024)
     assert p.returncode == 0, out(p)
 
 
@@ -382,11 +408,12 @@ def test_doctor_problems_fail_install(rig):
 
 # --- full (fake) install --------------------------------------------------------------------
 def test_install_system_ffmpeg(rig):
-    p = rig.run("--yes")
+    p = rig.run("--yes", "--use-system-ffmpeg")
     assert p.returncode == 0, out(p)
+    assert "results may differ from the tested ffmpeg 7.1.1" in p.stderr
     calls = rig.calls_text()
     assert re.search(r"^conda create -y -q -p \S+/env --override-channels -c conda-forge "
-                     r"--no-default-packages python=3.12 pip pyyaml jsonschema tesseract=5.5.2 leptonica=1.87$", calls, re.M)
+                     r"--no-default-packages python=3.12 pip pyyaml jsonschema tesseract=5.5.2 leptonica=1.87 pillow numpy$", calls, re.M)
     assert re.search(r"^python -m pip install --no-deps --no-index --force-reinstall \S+\.whl "
                      r"PYTHONPATH=unset PIP_CONFIG_FILE=/dev/null$", calls, re.M)
     assert "python -m pip check" in calls
@@ -419,16 +446,16 @@ def test_install_system_ffmpeg(rig):
     assert "Production Python policy" in p.stdout
     # log: D29 line style, every line
     lines = [l for l in rig.log.read_text().splitlines() if LOG_LINE.match(l)]
-    assert lines and any("step 9/9" in l for l in lines)
+    assert lines and any("step 10/10" in l for l in lines)
     assert all(LOG_LINE.match(l) for l in rig.log.read_text().splitlines() if l[:2] == "20")
 
 
 def test_install_env_ffmpeg_no_slate(rig):
-    p = rig.run("--yes", "--no-slate", extra_path=[str(rig.home / ".local/bin")], FAKE_FF_VERSION="4.4")
+    p = rig.run("--yes", "--no-slate", extra_path=[str(rig.home / ".local/bin")])
     assert p.returncode == 0, out(p)
     calls = rig.calls_text()
     assert re.search(r"^conda create -y -q -p \S+/env --override-channels -c conda-forge "
-                     r"--no-default-packages python=3.12 pip pyyaml jsonschema ffmpeg=7.1.1$", calls, re.M)
+                     r"--no-default-packages python=3.12 pip pyyaml jsonschema ffmpeg=7.1.1 pillow numpy$", calls, re.M)
     assert "ffmpeg-env" not in calls and not (rig.prefix / "ffmpeg-env").exists()
     text = rig.launcher.read_text()
     assert "CMR_TESSERACT" not in text and "ffmpeg/ffprobe: env" in text
@@ -524,17 +551,17 @@ def test_upgrade_updates_unedited_workspace_files_only(rig):
 def test_env_ffmpeg_and_tesseract_share_one_env(rig):
     """ffmpeg 7.1.1 and tesseract 5.5.2 go into ONE env (the fake conda refuses ffmpeg 6 +
     tesseract like the real solver, so a regression of the pin to 6.x fails here)."""
-    p = rig.run("--yes", ffmpeg=False)
+    p = rig.run("--yes")
     assert p.returncode == 0, out(p)
     calls = rig.calls_text()
     assert re.search(r"^conda create -y -q -p \S+/env --override-channels -c conda-forge --no-default-packages "
-                     r"python=3.12 pip pyyaml jsonschema ffmpeg=7.1.1 tesseract=5.5.2 leptonica=1.87$", calls, re.M)
+                     r"python=3.12 pip pyyaml jsonschema ffmpeg=7.1.1 tesseract=5.5.2 leptonica=1.87 pillow numpy$", calls, re.M)
     assert calls.count("conda create") == 1 and "ffmpeg-env" not in calls
     assert os.readlink(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.env_dir / "bin/ffmpeg")
     assert (f"cmr doctor CMR_TESSERACT={rig.env_dir}/bin/tesseract ffmpeg={rig.env_dir}/bin/ffmpeg") in calls
     state = (rig.prefix / "install-state").read_text()
     assert "ffmpeg_mode=env\n" in state and f"ffmpeg={rig.env_dir}/bin/ffmpeg\n" in state
-    assert "conda-forge, in cmr's environment" in p.stdout
+    assert "conda-forge 7.1.1, pinned, in cmr's environment" in p.stdout
 
 
 def test_environment_yml_pins_ffmpeg_71():
@@ -544,29 +571,65 @@ def test_environment_yml_pins_ffmpeg_71():
 
 
 def test_rerun_adds_ffmpeg_when_system_one_turns_bad(rig):
-    assert rig.run("--yes").returncode == 0
+    assert rig.run("--yes", "--use-system-ffmpeg").returncode == 0
     rig.reset_calls()
-    p = rig.run("--yes", FAKE_FF_MISSING="lut2")
+    p = rig.run("--yes", "--use-system-ffmpeg", FAKE_FF_MISSING="lut2")
     assert p.returncode == 0, out(p)
     # ffmpeg goes into the existing env next to tesseract (no separate ffmpeg env since 7.1)
     assert re.search(r"^conda install -y -q -p \S+/env .* ffmpeg=7\.1\.1 tesseract=5\.5\.2", rig.calls_text(), re.M)
     assert "conda create" not in rig.calls_text() and not (rig.prefix / "ffmpeg-env").exists()
     assert os.readlink(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.env_dir / "bin/ffmpeg")
     rig.reset_calls()                                 # next run: nothing to add
-    p = rig.run("--yes", FAKE_FF_MISSING="lut2")
+    p = rig.run("--yes", "--use-system-ffmpeg", FAKE_FF_MISSING="lut2")
     assert p.returncode == 0, out(p)
     assert "conda create" not in rig.calls_text() and "conda install" not in rig.calls_text()
     assert "Environment is up to date" in p.stdout
-    rig.reset_calls()                                 # system ffmpeg good again: it wins
-    p = rig.run("--yes")
+    rig.reset_calls()                                 # system ffmpeg good again + opt-in: it wins
+    p = rig.run("--yes", "--use-system-ffmpeg")
     assert p.returncode == 0, out(p)
     assert os.readlink(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.sysbin / "ffmpeg")
     assert "conda install" not in rig.calls_text()
 
 
+def test_rerun_without_flag_moves_system_install_to_pinned_ffmpeg(rig):
+    """An install that used the system ffmpeg gets the pinned 7.1.1 added to its env on a plain
+    re-run (same version, no --upgrade); --use-system-ffmpeg keeps the system one."""
+    assert rig.run("--yes", "--use-system-ffmpeg").returncode == 0
+    rig.reset_calls()
+    p = rig.run("--yes", "--use-system-ffmpeg")            # opt-in again: nothing changes
+    assert p.returncode == 0, out(p)
+    assert "conda install" not in rig.calls_text()
+    assert os.readlink(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.sysbin / "ffmpeg")
+    rig.reset_calls()
+    p = rig.run("--yes")
+    assert p.returncode == 0, out(p)
+    assert "The previous install used the system ffmpeg" in p.stdout and "about 1024 MB needed" in p.stdout
+    assert re.search(r"^conda install -y -q -p \S+/env .* ffmpeg=7\.1\.1", rig.calls_text(), re.M)
+    assert "pip install" not in rig.calls_text()            # same version: only the package added
+    for t in ("ffmpeg", "ffprobe"):
+        assert os.readlink(rig.prefix / "ffmpeg-bin" / t) == str(rig.env_dir / "bin" / t)
+    state = (rig.prefix / "install-state").read_text()
+    assert "ffmpeg_mode=env\n" in state and f"ffmpeg={rig.env_dir}/bin/ffmpeg\n" in state
+    assert f"cmr doctor CMR_TESSERACT={rig.env_dir}/bin/tesseract ffmpeg={rig.env_dir}/bin/ffmpeg" in rig.calls_text()
+    rig.reset_calls()                                 # next plain run: nothing left to do
+    p = rig.run("--yes")
+    assert p.returncode == 0, out(p)
+    assert "conda install" not in rig.calls_text() and "Environment is up to date" in p.stdout
+    assert "The previous install used the system ffmpeg" not in p.stdout
+
+
+def test_rerun_needing_ffmpeg_checks_free_space(rig):
+    assert rig.run("--yes", "--use-system-ffmpeg").returncode == 0
+    p = rig.run("--yes", FAKE_DF_AVAIL_KB=800 * 1024)      # enough for an update, not for ffmpeg
+    assert p.returncode == 1 and "about 1024 MB needed" in p.stderr
+    assert os.readlink(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.sysbin / "ffmpeg")
+    p = rig.run("--yes", "--use-system-ffmpeg", FAKE_DF_AVAIL_KB=800 * 1024)
+    assert p.returncode == 0, out(p)
+
+
 def old_ffmpeg_env_layout(rig):
     """An install made by the previous installer: ffmpeg in <prefix>/ffmpeg-env, links into it."""
-    assert rig.run("--yes").returncode == 0
+    assert rig.run("--yes", "--use-system-ffmpeg").returncode == 0
     ffenv = rig.prefix / "ffmpeg-env/bin"
     ffenv.mkdir(parents=True)
     (rig.prefix / "ffmpeg-env/conda-meta").mkdir()
@@ -590,10 +653,10 @@ def test_migration_from_ffmpeg_env_dry_run(rig):
 
 
 def test_migration_from_ffmpeg_env_into_env(rig):
-    """Old layout + no usable system ffmpeg: ffmpeg is installed into env, the links switch,
-    ffmpeg-env is removed and the log says so; the next run has nothing left to do."""
+    """Old layout (default run, a good system ffmpeg on PATH): ffmpeg is installed into env, the
+    links switch, ffmpeg-env is removed and the log says so; the next run has nothing left to do."""
     old_ffmpeg_env_layout(rig)
-    p = rig.run("--yes", ffmpeg=False)
+    p = rig.run("--yes")
     assert p.returncode == 0, out(p)
     calls = rig.calls_text()
     assert re.search(r"^conda install -y -q -p \S+/env .* ffmpeg=7\.1\.1", calls, re.M)
@@ -612,9 +675,10 @@ def test_migration_from_ffmpeg_env_into_env(rig):
 
 
 def test_migration_from_ffmpeg_env_system_ffmpeg_good(rig):
-    """Old layout but the system ffmpeg passes now: links go to it, the unused ffmpeg-env goes."""
+    """Old layout, --use-system-ffmpeg and the system ffmpeg passes: links go to it, the unused
+    ffmpeg-env goes."""
     old_ffmpeg_env_layout(rig)
-    p = rig.run("--yes")
+    p = rig.run("--yes", "--use-system-ffmpeg")
     assert p.returncode == 0, out(p)
     assert "conda install" not in rig.calls_text()
     assert not (rig.prefix / "ffmpeg-env").exists() and not (rig.env_dir / "bin/ffmpeg").exists()
@@ -668,6 +732,128 @@ def test_workspace_gets_the_guide(rig):
     write_sums(rig.bundle)
     assert rig.run("--yes").returncode == 0
     assert (rig.workspace / "USERGUIDE.md").read_text() == "guide v2\n"
+
+
+# --- demo spots (generated at install time by the bundled demo/make_spot.py) -----------------
+DEMO_CLEAN = "SB X League 2026_QB Pat_03_ABCD1234567H_1920x1080_Slated.mov"      # fake generator names
+DEMO_ERRORS = "SB X League 2026_QB Pat_03_ABCD1234567H_1280x720_Slated.mov"
+DEMO_FILES = [f"templates/starter/media/{DEMO_CLEAN}", f"demo_spots/clean/{DEMO_CLEAN}",
+              f"demo_spots/errors/many_errors/{DEMO_ERRORS}", "demo_spots/errors/many_errors/manifest.yaml",
+              f"demo_spots/errors/client_typo/{DEMO_CLEAN}", "demo_spots/errors/client_typo/manifest.yaml"]
+
+
+def demo_calls(rig) -> list:
+    return [l for l in rig.calls_text().splitlines() if "make_spot.py" in l]
+
+
+def test_demo_on_by_default(rig):
+    p = rig.run("--yes")
+    assert p.returncode == 0, out(p)
+    ws = rig.workspace
+    for f in DEMO_FILES:
+        assert (ws / f).is_file(), f
+    assert (ws / f"templates/starter/media/{DEMO_CLEAN}").read_text() == "clean spot\n"
+    assert (ws / f"demo_spots/errors/client_typo/{DEMO_CLEAN}").read_text() == "spot client_typo\n"
+    assert (ws / "templates/starter/media/README.txt").exists()           # the template stays
+    assert sorted((ws / ".cmr-demo-files").read_text().splitlines()) == sorted(DEMO_FILES)
+    # generated media is not a template: not in the template record
+    assert "demo_spots" not in (ws / ".cmr-installed-files").read_text()
+    assert ".mov" not in (ws / ".cmr-installed-files").read_text()
+    assert not list(ws.glob(".cmr-demo-tmp.*"))                            # temp folder removed
+    calls = demo_calls(rig)
+    assert len(calls) == 2 and all("--short" in c and "PYTHONPATH=unset" in c for c in calls)
+    assert calls[1].split(" PYTHONPATH")[0].endswith("--short --defect client_typo")
+    assert f"make_spot ffmpeg={rig.prefix}/ffmpeg-bin/ffmpeg" in rig.calls_text()   # cmr's ffmpeg
+    assert (rig.env_dir / "conda-meta/pillow-0.0-fake.json").exists()
+    assert "demo=1\n" in (rig.prefix / "install-state").read_text()
+    assert "Created in" in p.stdout and "demo_spots/" in p.stdout
+
+
+def test_no_demo(rig):
+    p = rig.run("--yes", "--no-demo")
+    assert p.returncode == 0, out(p)
+    assert "pillow" not in rig.calls_text() and "numpy" not in rig.calls_text()
+    assert not demo_calls(rig) and not (rig.workspace / "demo_spots").exists()
+    assert not (rig.workspace / ".cmr-demo-files").exists()
+    assert list((rig.workspace / "templates/starter/media").iterdir()) == [rig.workspace / "templates/starter/media/README.txt"]
+    assert "Skipped (--no-demo)" in p.stdout and "make_spot.py ~/cmr-demo --short" in p.stdout
+    assert "demo=0\n" in (rig.prefix / "install-state").read_text()
+    # turned on later: Pillow/numpy added to the same env, spots generated
+    rig.reset_calls()
+    p = rig.run("--yes")
+    assert p.returncode == 0, out(p)
+    assert re.search(r"^conda install .* pillow numpy$", rig.calls_text(), re.M)
+    assert "pip install" not in rig.calls_text()
+    assert len(demo_calls(rig)) == 2 and (rig.workspace / DEMO_FILES[0]).exists()
+
+
+def test_demo_dry_run(rig):
+    p = rig.run("--dry-run")
+    assert p.returncode == 0, out(p)
+    assert re.search(r"\[dry-run\] would run .*env/bin/python \S+/demo/make_spot.py TMP/main --short", p.stdout)
+    assert "--defect client_typo" in p.stdout and "would place" in p.stdout
+    assert "First check (the starter folder already holds a clean demo spot)" in p.stdout \
+        or "is not on your PATH" in p.stdout
+    assert list(rig.home.iterdir()) == []
+    p = rig.run("--dry-run", "--no-demo")
+    assert "make_spot.py TMP" not in p.stdout and "pillow" not in p.stdout
+
+
+def test_demo_rerun_is_idempotent(rig):
+    assert rig.run("--yes").returncode == 0
+    ws = rig.workspace
+    (ws / DEMO_FILES[0]).unlink()                                  # the user removed/moved it
+    (ws / "demo_spots/errors/many_errors/manifest.yaml").write_text("my notes\n")
+    for args in ((), ("--upgrade",)):
+        rig.reset_calls()
+        p = rig.run("--yes", *args)
+        assert p.returncode == 0, out(p)
+        assert not demo_calls(rig) and "Already created before" in p.stdout
+        assert not (ws / DEMO_FILES[0]).exists()                   # not created again
+        assert (ws / "demo_spots/errors/many_errors/manifest.yaml").read_text() == "my notes\n"
+        assert "conda install" not in rig.calls_text() or args       # pillow/numpy already there
+
+
+def test_demo_never_overwrites_existing_files(rig):
+    mine = rig.workspace / f"templates/starter/media/{DEMO_CLEAN}"
+    mine.parent.mkdir(parents=True)
+    mine.write_text("my own render\n")
+    p = rig.run("--yes")
+    assert p.returncode == 0, out(p)
+    assert mine.read_text() == "my own render\n"
+    assert (rig.workspace / f"demo_spots/clean/{DEMO_CLEAN}").read_text() == "clean spot\n"
+    assert f"templates/starter/media/{DEMO_CLEAN}" not in (rig.workspace / ".cmr-demo-files").read_text()
+
+
+def test_demo_failure_warns_but_install_succeeds(rig):
+    p = rig.run("--yes", FAKE_DEMO_FAIL=1)
+    assert p.returncode == 0, out(p)
+    assert "the demo spots could not be generated (the install itself is fine)" in p.stderr
+    assert "no font found" in p.stderr and "CMR_TEST_FONT" in p.stdout
+    assert "Run the installer again to retry, or make them by hand: mkdir -p ~/cmr-demo && PATH=" in p.stdout
+    assert f"{rig.env_dir}/bin/python {rig.bundle}/demo/make_spot.py ~/cmr-demo --short" in p.stdout
+    assert "no font found" in rig.log.read_text()
+    assert not (rig.workspace / ".cmr-demo-files").exists() and not (rig.workspace / "demo_spots").exists()
+    assert not list(rig.workspace.glob(".cmr-demo-tmp.*"))
+    assert "CheckMyRender 0.0.1 is installed." in p.stdout
+    p = rig.run("--yes")                                           # a re-run retries
+    assert p.returncode == 0 and (rig.workspace / DEMO_FILES[0]).exists()
+
+
+def test_bundle_without_generator_warns(rig):
+    shutil.rmtree(rig.bundle / "demo")
+    write_sums(rig.bundle)
+    p = rig.run("--yes")
+    assert p.returncode == 0, out(p)
+    assert "this bundle has no demo generator" in p.stderr
+
+
+def test_uninstall_keeps_demo_spots(rig):
+    assert rig.run("--yes").returncode == 0
+    p = rig.run("--uninstall", "--yes")
+    assert p.returncode == 0, out(p)
+    assert "The demo spots stay in the workspace too" in p.stdout
+    assert all((rig.workspace / f).exists() for f in DEMO_FILES)
 
 
 # --- uninstall ------------------------------------------------------------------------------
@@ -748,8 +934,13 @@ def test_bundle_contents(built):
     for f in ("install.sh", "environment.yml", "required_filters.txt", "VERSION", "README.txt",
               "README.md", "USERGUIDE.md",
               "SHA256SUMS", f"wheels/check_my_render-{version}-py3-none-any.whl",
-              "templates/README.md", "templates/specs/spec_review_render.yaml"):
+              "templates/README.md", "templates/specs/spec_review_render.yaml",
+              "templates/starter/job.yaml", "templates/starter/media/README.txt",
+              "demo/make_spot.py", "demo/values_fictional.yaml"):
         assert f in files, f
+    for f in ("make_spot.py", "values_fictional.yaml"):      # the test copy is the single source
+        assert (top / "demo" / f).read_bytes() == (ROOT / "tests/slate" / f).read_bytes()
+    assert not [f for f in files if f.endswith(".mov")]
     assert not [f for f in files if f.endswith("CLAUDE.md") or "__pycache__" in f]
     src = {str(p.relative_to(ROOT)) for d in ("examples", "templates") for p in (ROOT / d).rglob("*")
            if p.is_file() and p.name != "CLAUDE.md" and "__pycache__" not in p.parts}
@@ -805,8 +996,10 @@ def test_real_bundle_installs_with_fakes(built, tmp_path):
     r = Rig(tmp_path, bundle=top)
     p = r.run("--yes")
     assert p.returncode == 0, out(p)
-    assert "System ffmpeg is good enough" in p.stdout
+    assert "Using the pinned, tested conda-forge ffmpeg 7.1.1" in p.stdout
+    assert os.readlink(r.prefix / "ffmpeg-bin/ffmpeg") == str(r.env_dir / "bin/ffmpeg")
     assert not list(r.workspace.rglob("CLAUDE.md")) and (r.workspace / "examples/spot_xr/job.yaml").exists()
+    assert (r.workspace / f"templates/starter/media/{DEMO_CLEAN}").exists()     # bundled generator (faked)
 
 
 # --- macOS (D32): Apple silicon accepted, faked on any OS -----------------------------------------

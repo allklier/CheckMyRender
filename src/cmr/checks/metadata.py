@@ -216,7 +216,7 @@ class VideoColor(Check):
                 continue
             sev = unk if a == "unknown" else key_sev.get(key)
             out.append(ctx.finding(f"colour {key}: expected {e!r}, got {a!r}"
-                                   + (" (untagged)" if a == "unknown" else ""), sev,
+                                   + (" (untagged; check the colour-tag setting of the render)" if a == "unknown" else ""), sev,
                                    expected=e, actual=a, stream=v["index"]))
         return out
 

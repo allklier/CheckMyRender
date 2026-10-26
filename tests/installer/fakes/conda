@@ -23,6 +23,7 @@ for s in "${specs[@]}"; do
         ffmpeg*) cp "$FAKES/ffmpeg" "$env/bin/ffmpeg"; cp "$FAKES/ffmpeg" "$env/bin/ffprobe";;
         tesseract*) cp "$FAKES/tesseract" "$env/bin/tesseract";;
     esac
+    echo '{}' >"$env/conda-meta/${s%%=*}-0.0-fake.json"     # like conda's package records
 done
 printf '%s ' "${specs[@]}" >>"$env/.fake-specs"
 chmod +x "$env"/bin/*

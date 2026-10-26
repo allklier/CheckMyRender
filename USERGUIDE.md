@@ -6,21 +6,28 @@ against a **spec sheet** (what the delivery must be) using a **profile** (how st
 looks at every frame and every audio sample, and reports each problem with **timecode and
 frame number**.
 
-> **Status: 0.0.1, early.** The checks pass their test suite on generated media and on a few
+> **Status: release candidate for 0.1.0.** The checks pass their test suite on generated media and on a few
 > real files (see the "Known limits" of each check). Results on your renders still need a
 > human look: use cmr as a second pair of eyes, not as the final authority.
 
 Written for operators and technical leads at finishing / post houses who are at home on a
 Linux shell but are not software developers.
 
-**New here?** Check section 1 (what the machine needs; installing is section 20), then do
-**one** quick start: A for any render, B for an ad spot with a slate. Everything after that is
-reference; come back to it when you need it.
+**Reading order.** Sections 5 onwards are reference: come back to them when you need them.
+
+- **First run:** [How it fits together](#how-it-fits-together), [Sample files](#sample-files-that-ship-with-cmr),
+  1 (what the machine needs), then **one** quick start: 2 (A, any render) or 3 (B, an ad spot with a slate)
+- **When a finding appears:** 6 (and the check's entry in 10)
+- **To tune:** 7, 8, 11 (fast or high: 9)
+- **Accepting findings:** 4 (quick start C), then 12
+- **Automation:** 13 &nbsp; **Slated spots:** 14 &nbsp; **Installing:** 20
 
 Contents
 
+- [How it fits together](#how-it-fits-together)
+- [Sample files that ship with cmr](#sample-files-that-ship-with-cmr)
 1. [Platform requirements](#1-platform-requirements)
-2. [Quick start A: any render, no slate](#2-quick-start-a-any-render-no-slate)
+2. [Quick start A: your first check in five steps](#2-quick-start-a-your-first-check-in-five-steps)
 3. [Quick start B: an ad spot with a slate](#3-quick-start-b-an-ad-spot-with-a-slate)
 4. [Quick start C: accept a finding you have reviewed](#4-quick-start-c-accept-a-finding-you-have-reviewed)
 5. [Running a check](#5-running-a-check)
@@ -39,7 +46,7 @@ Contents
 18. [Glossary](#18-glossary)
 19. [Not built yet](#19-not-built-yet)
 - [Appendix A: demo media used in this guide](#appendix-a-demo-media-used-in-this-guide)
-20. [Installation (Rocky Linux)](#20-installation-rocky-linux)
+20. [Installation (Rocky Linux and macOS)](#20-installation-rocky-linux-and-macos)
 
 Starter files to copy: [templates/](templates/README.md) and [examples/spot_xr/](examples/spot_xr/).
 
@@ -49,41 +56,291 @@ was produced by that command on generated test media (Appendix A), unless marked
 
 Two folders are named in the commands. `TEMPLATES` is the folder with the starter files:
 `~/cmr-workspace/templates` after the installer (section 20), or `templates/` in the
-CheckMyRender folder you received (`~/CheckMyRender` in this guide). The **demo-media scripts**
-(`tests/media/make_media.py`, `tests/slate/make_spot.py`) are in the `tests/` folder of that
-CheckMyRender folder; the installer bundle does not contain them.
+CheckMyRender folder you received (`~/CheckMyRender` in this guide). The **demo spots** (a
+slated ad spot, clean and with planted errors) are made by the installer: the clean one is
+already in `~/cmr-workspace/templates/starter/media/`, the others are in
+`~/cmr-workspace/demo_spots/`. The other **demo-media script** (`tests/media/make_media.py`, the
+review renders of quick starts A and C) is only in the `tests/` folder of a CheckMyRender folder.
+
+---
+
+## How it fits together
+
+A check involves five things:
+
+1. **The render**: the file you check (MOV, MXF, MP4). cmr only reads it.
+2. **The spec sheet** (YAML): the facts of one deliverable: codec, size, frame rate, program
+   length in frames, head and tail layout, start timecode, audio tracks, file name. One per
+   deliverable. Section 8.
+3. **The profile** (YAML): the rules: which checks run, tolerances, severities, fast or high
+   quality. Stock profiles ship inside cmr (`review`, `release`, `spot_review`, ...; `cmr profiles
+   list`); your own profile starts from one. A profile takes job values from the spec
+   (`${spec.video.fps}`). Section 7.
+4. **The job file** `job.yaml` (optional): one file that names the spec, the profile, the
+   deliverables CSV and slate template (slated spots), the waiver file and the report folder. In
+   its folder `cmr check RENDER.mov` needs no other option. Section 5.
+5. **The result**: a console report, a JSON report (with `--report json`, or always when the job
+   file names an `output:` folder) and an exit code: 0 pass, 1 warn, 2 fail, 3 the tool could not
+   check. Findings you have reviewed and accept go into a **waiver file** (`cmr waive`, section 12)
+   so the next run does not flag them again.
+
+```
+   spec sheet        profile          waivers.yaml      named in job.yaml,
+   (job facts)       (rules)          (optional)        or given as options
+        |               |                 |
+        +---------------+-----------------+
+                        |
+   render.mov ---> cmr check ---> console report + JSON report + exit code 0/1/2/3
+```
+
+**The golden rule: copy a sample, edit the copy.** Every kind of file above ships as a commented
+sample (next section). Keep your copies in a folder of your own (`~/qc/`, see
+[templates/README.md](templates/README.md)), never edit the samples in place. The quickest
+start is the **starter folder**, one copy per job with all of the above in it (quick start A).
+
+---
+
+## Sample files that ship with cmr
+
+Every config file cmr reads has a sample. After the installer they are in `~/cmr-workspace/`
+(the installer copies `examples/` and `templates/` there, plus this guide and the README; a
+sample you edited there is never overwritten by an update). In a CheckMyRender folder you
+received (a source checkout, `~/CheckMyRender` in this guide) they are in the same sub-folders.
+The paths below are relative to either folder.
+
+| kind of file | where (under `~/cmr-workspace/` or `~/CheckMyRender/`) | which sample for which situation |
+|---|---|---|
+| **starter folder** (start here) | `templates/starter/` | a complete job folder for an HD ad spot: `job.yaml` (with slate checks), `job_no_slate.yaml` (without), `spec_starter.yaml`, `deliverables.csv`, `slates/slate_template.yaml`, `media/` (after the installer it already holds the clean demo spot; your video goes here) and a `README.md` with the steps. Works unedited with the demo spot (quick starts A and B) |
+| **demo spots** (made by the installer) | `demo_spots/` (only in `~/cmr-workspace/`) | `clean/` the slated demo spot that passes (the same file as in `templates/starter/media/`); `errors/client_typo/` the same spot with one slate typo; `errors/many_errors/` a spot with many planted errors, each listed in its `manifest.yaml` (quick starts A and B). About 60 MB each; `install.sh --no-demo` skips them |
+| spec sheet (job facts) | `templates/specs/` (and `templates/starter/spec_starter.yaml`) | `spec_review_render.yaml` review render (quick start A, without a job file); `spec_master_generic.yaml` final file-based master; `spec_broadcast_hd_longform.yaml` HD long form with bars, slate, drop-frame timecode, two audio streams, captions; `spec_spot_short_form.yaml` ad spot without slate reading; `spec_colour_interim_noaudio.yaml` picture-only colour/comp interim |
+| spec sheet, filled-in examples | `examples/` | `spec_review.yaml` (with `review`), `spec_hd_broadcast.yaml` and `spec_spot_30s.yaml` (with `release`): shorter, illustrative values; start from `templates/specs/` for real jobs |
+| profile, stock (rules) | inside cmr, not a file in the workspace (in a checkout: `profiles/`) | used by name: `--profile review`; `cmr profiles list` lists them, `cmr profiles show NAME` prints one. Never edited: your own profile extends one (section 7) |
+| profile, client starters | `templates/profiles/` | `client_render_check.yaml` settings only, seconds after the render; `client_review.yaml` review renders; `client_delivery.yaml` final deliveries; `client_colour_interim.yaml` picture-only interims. Copy to `~/qc/profiles/`, rename, use by path |
+| job file `job.yaml` | `templates/starter/`, `templates/slate/`, `examples/spot_xr/` | `starter/` the starter job (above); `slate/` a slated job with more comments and a :30 spot; `examples/spot_xr/` a :60 spot, plus `job_label_colon.yaml` for "Label: value" slates (section 14). A job without a slate needs only six lines (section 5) |
+| deliverables CSV (slated spots, one row per spot) | next to each job file above | `deliverables.csv` in each folder; `examples/spot_xr/deliverables_label_colon.csv` for the "Label: value" job |
+| slate template (slated spots) | `templates/starter/slates/`, `templates/slate/slates/`, `examples/spot_xr/slates/` | `slate_template.yaml` (the demo slate design); `xr_standard.yaml` labels and values with bars; `xr_label_colon.yaml` "Label: value" slates (section 14) |
+| waiver file | `templates/waivers/waivers_example.yaml` | to read: shows what `cmr waive` writes (you do not write waivers by hand; section 12) |
+| automation | `templates/automation/` | `overnight_qc.sh` checks a folder of renders, `summarize_reports.py` sums up the reports, `overnight_qc.launchd.plist` runs the script every evening on macOS (section 13) |
+| demo-media scripts | `tests/slate/make_spot.py` (also in the installer bundle as `demo/make_spot.py`: the installer runs it once to make the demo spots); `tests/media/make_media.py`: **only in a CheckMyRender folder** | make small test renders when you have none at hand (Appendix A) |
+
+The longer table "what to copy for which situation" (which spec goes with which profile) and a
+suggested folder layout are in [templates/README.md](templates/README.md).
 
 ---
 
 ## 1. Platform requirements
 
-- **Linux**, tested on Rocky Linux 9. macOS (Apple Silicon only) is planned, not available
-  (section 19).
+- **Linux**, tested on Rocky Linux 9. **macOS on Apple Silicon (M-series) is supported** with the
+  same installer (section 20); Intel Macs and a shell running under Rosetta are refused.
 - **Python 3.12 in its own environment** (conda). Never update or replace the system Python
   on a Flame workstation (Rocky 9 ships 3.9, which Flame and the OS rely on). The installer
   (section 20) creates the environment for you.
-- **ffmpeg and ffprobe**, version 5.1 or newer with the filters cmr uses (`cmr doctor` checks
-  them). Tested: 6.1.1 on Ubuntu, 5.1.10 on Rocky 9. The installer uses the ones the OS
-  provides when they are good enough, else installs ffmpeg 6.1 into cmr's own environment.
+- **ffmpeg and ffprobe 7.1.1**, the tested version: the installer always installs conda-forge
+  ffmpeg 7.1.1 into cmr's own environment, so every machine (Rocky and Mac) gives comparable
+  results; the system ffmpeg is not used and never changed. `install.sh --use-system-ffmpeg`
+  uses the system ffmpeg instead (5.1 or newer with every filter cmr needs), with a warning:
+  results can then differ (ffprobe 5.1, Rocky 9's version, reports the colour tags of ProRes
+  files as unknown, which gives false colour-tag WARNs). `cmr doctor` checks the filters and
+  prints a WARNING line when ffmpeg or ffprobe is not 7.1.
 - **tesseract 5** reads the slate of ad spots (section 14). The installer installs it by
   default (`--no-slate` leaves it out); without it everything except the slate text checks works.
-- Disk: about 3 GB for the installer's environment (1.5 GB without tesseract). Network access
+- Disk: about 3.5 GB for the installer's environment and demo spots (2.5 GB without tesseract,
+  0.5 GB less without the demo spots). Network access
   to conda-forge during installation only; cmr itself never needs the network.
 - `cmr doctor` tells you whether the machine is ready.
 
 ---
 
-## 2. Quick start A: any render, no slate
+## 2. Quick start A: your first check in five steps
 
-Goal: check one render against a spec of its own. About five minutes.
+Goal: see cmr pass a good file and catch a bad one, then a first result on your own render,
+in about five minutes. You use the **starter folder** (`templates/starter/`): a complete job
+folder (spec sheet, job file, deliverables list, slate template) for an HD ad spot, with a
+clean demo spot already in its `media/` folder. Quick start B explains the slate checks.
 
-You need a render and `cmr` working (`cmr doctor` says `OK`). Here we use a generated demo
-render (one ProRes file, one stereo audio track); with your own render skip the first block
-and use your file instead. The demo script is in the `tests/` folder of the CheckMyRender
-folder ([Appendix A](#appendix-a-demo-media-used-in-this-guide)).
+**1. Install** cmr once per machine (section 20). From the bundle:
 
-**1. Make the demo render and copy a spec template.** The templates are never edited in
-place. (For real jobs keep specs in `~/qc/specs/`, see [templates/README.md](templates/README.md).)
+```
+tar xzf cmr-<version>-bundle.tar.gz
+cmr-<version>/install.sh
+cmr doctor                                   # must say OK
+```
+
+The installer also makes the demo spots (10-20 s): a clean slated :03 spot in
+`~/cmr-workspace/templates/starter/media/` and spots with planted errors in
+`~/cmr-workspace/demo_spots/errors/`.
+
+**2. Copy the starter folder.** One folder per job; the original stays as it is. The copy
+carries the demo spot in `media/`:
+
+```
+mkdir -p ~/qc
+cp -r ~/cmr-workspace/templates/starter ~/qc/my_first_job
+cd ~/qc/my_first_job
+```
+
+| file in the folder | what it is |
+|---|---|
+| `job.yaml` | the job file: names the spec, the profile (stock `spot_delivery`), the waiver file and the report folder, plus the job data for the slate checks (agency, client, filename pattern, CSV, slate template) |
+| `job_no_slate.yaml` | the same job without slate reading (stock profile `release`; needs no tesseract) |
+| `spec_starter.yaml` | the spec sheet: codec, size, frame rate, colour, head layout, program length, audio |
+| `deliverables.csv`, `slates/slate_template.yaml` | the spot list and the slate design (quick start B) |
+| `media/` | the clean demo spot; later your video |
+| `README.md` | the same steps, short |
+
+**3. Check the demo spot** (it matches the folder, so it passes, in a few seconds):
+
+```
+cmr check media/*.mov
+job file: ~/qc/my_first_job/job.yaml (job demo_sb_league)
+PASS    media/SB X League 2026_ProRes Generic Submaster_QB Pat_03_ABCD1234567H_1920x1080_Slated.mov
+        30000/1001 fps, 300 frames, start TC 00:59:53:00 (file)
+  SKIPPED captions.presence: captions not required by spec
+JOB demo_sb_league
+RESULT PASS (exit 0): PASS 27, SKIPPED 1
+report: ~/qc/my_first_job/reports/cmr_report_20261026-204700_58f4b1.json (also ~/qc/my_first_job/reports/cmr_report_latest.json)
+```
+
+(Paths shortened.) A `job.yaml` in the current folder is used by itself; it reads the slate
+too, which needs tesseract (installed unless you gave `install.sh --no-slate`). Without
+tesseract, or for a render without a slate, use the job file without slate reading:
+
+```
+cmr check media/*.mov --job job_no_slate.yaml
+PASS    media/SB X League 2026_ProRes Generic Submaster_QB Pat_03_ABCD1234567H_1920x1080_Slated.mov
+        30000/1001 fps, 300 frames, start TC 00:59:53:00 (file)
+  SKIPPED captions.presence: captions not required by spec
+JOB demo_sb_league
+RESULT PASS (exit 0): PASS 22, SKIPPED 1
+report: ~/qc/my_first_job/reports/cmr_report_20261026-205028_044402.json (also ~/qc/my_first_job/reports/cmr_report_latest.json)
+```
+
+(SKIPPED = one check did not apply; everything that ran passed, so the file is PASS, exit 0.)
+
+**4. Swap in a spot with an error.** The same spot, but its slate spells the client wrong:
+
+```
+rm media/*.mov
+cp ~/cmr-workspace/demo_spots/errors/client_typo/*.mov media/
+cmr check media/*.mov
+  ...
+  FAIL    slate.content: slate CLIENT 'Sample Bugrers', expected 'Sample Burgers' @ 00:59:53:01-00:59:57:28 (frames 1-148)
+RESULT FAIL (exit 2): PASS 26, SKIPPED 1, FAIL 1
+```
+
+`~/cmr-workspace/demo_spots/errors/many_errors/` holds a spot with many planted errors (wrong
+length, black frames, clipping, a 1-pixel edge line, slate mistakes; each one is listed in the
+`manifest.yaml` next to it); its result is shown in quick start B.
+
+**5. Your own video.** Empty `media/` and copy your render in:
+
+```
+rm media/*.mov
+cp /path/to/RENDER.mov media/          # or a link for big files: ln -s /path/to/RENDER.mov media/
+cmr check media/*.mov --job job_no_slate.yaml
+```
+
+Start with `job_no_slate.yaml` (technical checks only); `job.yaml` also checks the slate and
+the filename against the job data, which you set up in quick start B. Another file type: use
+its ending, `media/*.mxf`. cmr reads the file, prints the result and writes a JSON report into
+`reports/`. It never changes your video.
+
+**Read the result.** Your own render will almost certainly show findings the first time. That
+is expected: the sample spec describes the demo spot (1920x1080 ProRes 422 HQ, 29.97, 5 s slate
++ 2 s black, then a 3-second program), and every value of your file that differs from the
+spec is named, with the expected and the actual value. A 23.976 review render with a short
+head, checked with the unedited starter folder:
+
+```
+FAIL    media/SHOWNAME_101_HD_2398_ST_v03.mov
+        24000/1001 fps, 96 frames, start TC 00:59:59:00 (file)
+  SKIPPED audio.clipping: head/tail layout does not fit the file: no program range
+  SKIPPED audio.loudness: head/tail layout does not fit the file: no program range
+  SKIPPED audio.silence: head/tail layout does not fit the file: no program range
+  SKIPPED audio.silent_channel: head/tail layout does not fit the file: no program range
+  SKIPPED captions.presence: captions not required by spec
+  FAIL    filename: filename: expected 'SB X League 2026_ProRes Generic Submaster_QB Pat_03_ABCD1234567H_1920x1080_Slated.mov', got 'SHOWNAME_101_HD_2398_ST_v03.mov'
+  FAIL    timing.frame_count: program frames: expected 90 (+-0), got -114 (file 96 - head 210 - tail 0)
+  FAIL    timing.layout: head (210) + tail (0) frames fall outside the file (96 frames)
+  FAIL    timing.timecode_start: start timecode: expected 00:59:51:06 (program_start_timecode - 210 head frames), got 00:59:59:00 from stream 0 (off by +186 frames) @ 00:59:59:00 (frame 0)
+  SKIPPED video.black_runs: program range unknown (head/tail layout does not fit)
+  FAIL    video.fps: frame rate (r_frame_rate): expected 30000/1001, got 24000/1001
+  FAIL    video.fps: average frame rate: expected 30000/1001, got 24000/1001
+JOB demo_sb_league
+RESULT FAIL (exit 2): PASS 12, SKIPPED 6, FAIL 6
+report: ~/qc/my_first_job/reports/cmr_report_20261026-205040_a1d382.json (also ~/qc/my_first_job/reports/cmr_report_latest.json)
+```
+
+(Paths shortened.) Each block starts with the file's verdict, frame rate, frame count and
+start timecode. Then one line per problem: severity, which check, what was expected and what
+was found, and for problems in the picture or sound `@ timecode (frame)`: type that timecode
+into Flame or your player to see the spot. SKIPPED means a check could not apply (here: the
+head is longer than the whole file, so there is no program range to measure). `RESULT` is
+the verdict of the run.
+
+**Make the spec fit your job.** That list is exactly what to change in your copy of
+`spec_starter.yaml` (or what is wrong with the render). The lines you usually change are
+marked `# EDIT`; `cmr probe media/*.mov` shows what is in the file:
+
+| field in `spec_starter.yaml` | demo value | typical change |
+|---|---|---|
+| `video.codec`, `video.codec_profile` | `prores`, `"422 HQ"` | `"4444"`, `dnxhd`, `h264` |
+| `video.width`, `video.height` | 1920, 1080 | 3840, 2160 for UHD |
+| `video.fps` | `"30000/1001"` (29.97) | `"24000/1001"` (23.976), `"25"` |
+| `video.pixel_format` | `yuv422p10le` | the value the report shows for your codec |
+| `timing.timecode_mode` | `non-drop` | `drop` |
+| `timing.program_duration_frames` | 90 (3 s) | 900 = :30 at 29.97, 450 = :15, 720 = :30 at 23.976 |
+| `timing.head_layout` | slate 150 + black 60 | your slate and black lengths; no slate: only `- {type: program}` |
+| `audio.tracks`, `audio.loudness.standard` | one stereo track, `"ATSC A/85"` | your tracks; `"EBU R128"` |
+
+The `filename` finding comes from `job_no_slate.yaml`: set `job.title` and `naming_pattern`
+there (lines marked `# EDIT`). Run again and repeat until a render you know is good passes;
+from then on the folder checks every new render of that deliverable. Section 8 explains every
+spec field.
+
+**The exit code** (for scripts and cron) is the worst result of all files:
+
+| code | meaning |
+|---|---|
+| 0 | pass (also: only INFO or SKIPPED) |
+| 1 | worst result is WARN: look at it |
+| 2 | worst result is FAIL: do not deliver as is |
+| 3 | ERROR: the tool could not check (bad config, missing file or filter, wrong command line) |
+
+**What next:** the slate of an ad spot: quick start B (same folder). A problem you have looked
+at and accept: quick start C. For a check in seconds right after Flame writes the file, use a
+copy of `templates/profiles/client_render_check.yaml` (settings only, no picture or sound
+measurements). Other deliverables (long form, review renders, interims): the spec and profile
+samples in [Sample files](#sample-files-that-ship-with-cmr). Details: options (section 5),
+reading results (section 6), profiles (section 7), spec fields (section 8).
+
+### Making the demo spots again
+
+The installer made the demo spots once, with the generator it ships (`demo/make_spot.py` in the
+bundle; `tests/slate/make_spot.py` in a CheckMyRender folder). A demo file you delete or move
+is not made again by a later install (the list of what it made is
+`~/cmr-workspace/.cmr-demo-files`). To make a fresh set by hand, run the generator with the
+Python of cmr's environment (it has Pillow and numpy unless you installed with `--no-demo`)
+and the ffmpeg of cmr:
+
+```
+mkdir -p ~/qc/spots
+PATH=~/.local/share/cmr/ffmpeg-bin:$PATH ~/.local/share/cmr/env/bin/python cmr-<version>/demo/make_spot.py ~/qc/spots --short
+```
+
+From a CheckMyRender folder, any Python with Pillow, numpy and PyYAML works:
+`python3 ~/CheckMyRender/tests/slate/make_spot.py ~/qc/spots --short` (it refuses an output
+folder inside the CheckMyRender folder). It writes `spots/clean/` (the clean :03 spot) and
+`spots/errors/` (the spot with many planted errors, listed in `spots/manifest.yaml`);
+`--defect client_typo` (into another folder) makes the slate-typo spot.
+
+### Without a job file: a review render with a spec and a stock profile
+
+A job file is optional: `cmr check` also takes the spec and the profile as options. This is
+the quickest way to check renders that are not ad spots, e.g. review renders, with a spec from
+`templates/specs/`. Here with a generated demo review render (one ProRes file, one stereo
+audio track; the generator `make_media.py` is in the `tests/` folder and needs only Python 3
+and ffmpeg). Quick start C and the reference sections use this `~/cmr_demo` folder.
 
 ```
 TEMPLATES=~/cmr-workspace/templates          # or ~/CheckMyRender/templates (see the top of this guide)
@@ -91,14 +348,11 @@ mkdir -p ~/cmr_demo && cd ~/cmr_demo
 python3 ~/CheckMyRender/tests/media/make_media.py . one_track     # needs ffmpeg only
 mkdir -p specs
 cp $TEMPLATES/specs/spec_review_render.yaml specs/spec_showname_101.yaml
-```
-
-**2. Look at what is really in a known-good render**, then edit the few lines marked `# EDIT`
-in the copy. Everything else in the template is a normal HD ProRes review render:
-
-```
 cmr probe one_track/*.mov
 ```
+
+Edit the few lines marked `# EDIT` in the copy. Everything else in the review template is a
+normal HD ProRes review render:
 
 | field in the spec | set it to |
 |---|---|
@@ -116,10 +370,9 @@ sed -i -e 's/title_code: "EXFEAT"/title_code: "SHOWNAME"/' \
        -e 's/program_duration_frames: 2880/program_duration_frames: 48/' specs/spec_showname_101.yaml
 ```
 
-Also compare `video.width/height/fps` and `head_layout` / `tail_layout` with your render
-(the template has a 1-frame slate + 23 black head and a 24-frame black tail).
-
-**3. Check that spec and profile load**, then run the check with a stock profile:
+With your own render also compare `video.width/height/fps` and `head_layout` / `tail_layout`
+(the template has a 1-frame slate + 23 black head and a 24-frame black tail). Then check that
+spec and profile load, and run the check with a stock profile:
 
 ```
 cmr profiles show review --spec specs/spec_showname_101.yaml
@@ -130,9 +383,7 @@ cmr check one_track/*.mov --profile review --spec specs/spec_showname_101.yaml
 profile does not load. Choose the profile by purpose: `review` (review renders, fast),
 `release` (final deliveries, strict, needs the spec's captions/loudness keys), or a copy of a
 `templates/profiles/client_*` file given by path (`--profile ~/qc/profiles/hl_review.yaml`).
-`cmr profiles list` shows the stock ones; section 7 explains them.
-
-**4. Read the result.** With the edits above:
+`cmr profiles list` shows the stock ones; section 7 explains them. With the edits above:
 
 ```
 PASS    one_track/SHOWNAME_101_HD_2398_ST_v03.mov
@@ -152,9 +403,6 @@ FAIL    one_track/SHOWNAME_101_HD_2398_ST_v03.mov
 RESULT FAIL (exit 2): PASS 19, INFO 1, FAIL 2
 ```
 
-Each line: severity, which check, what is wrong, then `@ timecode (frame)`: type that
-timecode into Flame or your player to see the spot. The last line is the verdict.
-
 A render with a real problem looks the same. Here a demo file whose timecode starts one second
 late (`make_media.py . wrong_tc`; this demo has two audio tracks, so the one-track spec also
 reports `audio.layout`):
@@ -168,84 +416,64 @@ FAIL    wrong_tc/SHOWNAME_101_HD_2398_ST_v03.mov
 RESULT FAIL (exit 2): PASS 19, FAIL 3
 ```
 
-**The exit code** (for scripts and cron) is the worst result of all files:
-
-| code | meaning |
-|---|---|
-| 0 | pass (also: only INFO or SKIPPED) |
-| 1 | worst result is WARN: look at it |
-| 2 | worst result is FAIL: do not deliver as is |
-| 3 | ERROR: the tool could not check (bad config, missing file or filter, wrong command line) |
-
-**What next:** for a check in seconds right after Flame writes the file, use a copy of
-`templates/profiles/client_render_check.yaml` (settings only, no picture or sound measurements).
-Details: options (section 5), reading results (section 6), profiles (section 7), spec fields
-(section 8). A spot with a slate: quick start B. A problem you have looked at and accept:
-quick start C.
-
 ---
 
 ## 3. Quick start B: an ad spot with a slate
 
 Goal: check a slated spot against the job data (agency, client, Ad-ID, title, length) and the
-slate text. The slate is read with OCR, so this needs **tesseract** (sections 1 and 14).
-About ten minutes. The same job folder works for your real spots: only the values change.
+slate text. The slate is read with OCR, so this needs **tesseract** (sections 1 and 14; the
+installer includes it unless you gave `--no-slate`). About ten minutes. It uses the same
+starter folder as quick start A, with its default job file `job.yaml`.
 
-**1. Copy the starter job folder and make the demo spot.** `templates/quickstart/` is a
-complete job for the generated demo spot: it works unedited.
+**1. Run the slated job.** In the folder of quick start A, with the clean demo spot (or your
+spot) in `media/`:
 
 ```
-TEMPLATES=~/cmr-workspace/templates          # or ~/CheckMyRender/templates
-cp -r $TEMPLATES/quickstart ~/qc_demo && cd ~/qc_demo
-python3 ~/CheckMyRender/tests/slate/make_spot.py spots --short
+cd ~/qc/my_first_job
+cmr check media/*.mov
 ```
 
-`make_spot.py` is the demo-media generator from the `tests/` folder (not part of the installer
-bundle). It needs Python with **Pillow, numpy and PyYAML**; the cmr environment made by the
-installer does not contain Pillow and numpy, so use another Python that has them (the system
-`python3` on many machines), or add them to an environment of your own
-(`conda install pillow numpy`; **UNVERIFIED** for the installer environment). It refuses an
-output folder inside the CheckMyRender folder. It writes `spots/clean/` (a correct :03 spot)
-and `spots/errors/` (the same spot with planted errors, listed in `spots/manifest.yaml`).
-
-What the job folder contains:
+A `job.yaml` in the current folder is picked up by itself, so no other option is needed.
+Besides the technical checks of quick start A it reads the slate and compares it, and the file
+name, with the job data:
 
 | file | what it is |
 |---|---|
 | `job.yaml` | the entry point: names the spec, profile, waiver file and report folder, holds the job constants (job id, agency, client, artist), the expected filename pattern and where the CSV and slate template are |
-| `spec_spot_short.yaml` | the technical spec: codec, frame rate, head layout, program length, audio |
+| `spec_starter.yaml` | the technical spec: codec, frame rate, head layout, program length, audio (shared with `job_no_slate.yaml`) |
 | `deliverables.csv` | one row per spot of the job: Ad-ID, title, length (no filenames) |
 | `slates/slate_template.yaml` | the design of the slate: which labels it has and what each must say |
-| profile `spot_review` | the rules (a stock profile named in `job.yaml`, nothing to copy; `spot_render` and `spot_delivery` also exist) |
+| profile `spot_delivery` | the rules (a stock profile named in `job.yaml`, nothing to copy; `spot_render` and `spot_review` also exist) |
 
-**2. Run it.** `job.yaml` in the current folder is picked up by itself, so no other option is
-needed:
-
-```
-cmr check spots/clean/*.mov
-```
-
-**3. Read the result.** A good spot:
+**2. Read the result.** A good spot:
 
 ```
-job file: ~/qc_demo/job.yaml (job demo_sb_league)
-PASS    spots/clean/SB X League 2026_ProRes Generic Submaster_QB Pat_03_ABCD1234567H_1920x1080_Slated.mov
+job file: ~/qc/my_first_job/job.yaml (job demo_sb_league)
+PASS    media/SB X League 2026_ProRes Generic Submaster_QB Pat_03_ABCD1234567H_1920x1080_Slated.mov
         30000/1001 fps, 300 frames, start TC 00:59:53:00 (file)
   SKIPPED captions.presence: captions not required by spec
 JOB demo_sb_league
 RESULT PASS (exit 0): PASS 27, SKIPPED 1
-report: ~/qc_demo/reports/cmr_report_20261026-163051_bcc1c4.json (also ~/qc_demo/reports/cmr_report_latest.json)
+report: ~/qc/my_first_job/reports/cmr_report_20261026-204700_58f4b1.json (also ~/qc/my_first_job/reports/cmr_report_latest.json)
 ```
 
-(Paths shortened. SKIPPED = one check did not apply; everything that ran passed, so the file
-is PASS, exit 0.) The first line says which job file was used (it goes to stderr), `JOB` names
+(Paths shortened.) The first line says which job file was used (it goes to stderr), `JOB` names
 the job, and because `job.yaml` has an `output:` folder the JSON report is written as well.
-
-The `errors` spot carries the planted errors. Abridged output (audio, colour-bar and some long lines left out or shortened):
+Without tesseract the slate checks cannot run; they say so as ERROR (exit 3), and everything
+else is still checked:
 
 ```
-cmr check spots/errors/*.mov
-FAIL    spots/errors/SB X League 2026_ProRes Generic Submaster_QB Pat_03_ABCD1234567H_1280x720_Slated.mov
+  ERROR   slate.content: slate not read: tesseract not found ('tesseract'); install tesseract 5 and put it on PATH, or set CMR_TESSERACT or the profile param `tesseract`
+```
+
+The demo spot in `~/cmr-workspace/demo_spots/errors/many_errors/` carries many planted errors
+(listed in the `manifest.yaml` next to it). Here checked with the review rules (`--profile
+spot_review`, where some slate findings are WARN instead of FAIL). Abridged output (audio,
+colour-bar and some long lines left out or shortened):
+
+```
+cmr check ~/cmr-workspace/demo_spots/errors/many_errors/*.mov --profile spot_review
+FAIL    ~/cmr-workspace/demo_spots/errors/many_errors/SB X League 2026_ProRes Generic Submaster_QB Pat_03_ABCD1234567H_1280x720_Slated.mov
         30000/1001 fps, 299 frames, start TC 00:59:53:00 (file)
   FAIL    filename: filename: expected 'SB X League 2026_ProRes Generic Submaster_QB Pat_03_ABCD1234567H_1920x1080_Slated.mov', got '...1280x720_Slated.mov'
   FAIL    slate.claims: slate DURATION ':03' = 90 frames (3 s x 30 timecode frames/s) but the program is 89 frames (-1) @ 00:59:53:01-00:59:57:28 (frames 1-148)
@@ -261,16 +489,14 @@ RESULT FAIL (exit 2): PASS 17, SKIPPED 1, WARN 6, FAIL 13
 ```
 
 **When a slate field is wrong.** A spot whose slate spells the client `Sample Bugrers`
-(make it with `make_spot.py spots_typo --short --defect client_typo`; use a separate output
-folder for each defect):
+(`~/cmr-workspace/demo_spots/errors/client_typo/`, quick start A step 4). With the delivery
+rules of `job.yaml` this is a FAIL:
 
 ```
-cmr check spots_typo/client_typo/*.mov
-WARN    spots_typo/client_typo/SB X League 2026_ProRes Generic Submaster_QB Pat_03_ABCD1234567H_1920x1080_Slated.mov
-        30000/1001 fps, 300 frames, start TC 00:59:53:00 (file)
-  SKIPPED captions.presence: captions not required by spec
-  WARN    slate.content: slate CLIENT 'Sample Bugrers', expected 'Sample Burgers' @ 00:59:53:01-00:59:57:28 (frames 1-148)
-RESULT WARN (exit 1): PASS 26, SKIPPED 1, WARN 1
+cmr check ~/cmr-workspace/demo_spots/errors/client_typo/*.mov
+  ...
+  FAIL    slate.content: slate CLIENT 'Sample Bugrers', expected 'Sample Burgers' @ 00:59:53:01-00:59:57:28 (frames 1-148)
+RESULT FAIL (exit 2): PASS 26, SKIPPED 1, FAIL 1
 ```
 
 The message names the slate field, what the slate says and what the job expects. Decide which
@@ -283,16 +509,18 @@ side is wrong:
 The OCR can misread; a result marked `check by eye` is uncertain: look at the slate frame
 (the timecode is in the message).
 
-**Using it for a real spot.** Keep one job folder per job (`~/qc/jobs/<job>/`, copy of
-`quickstart/` or of `slate/`, which has more comments and a :30 spot) and edit:
+**Using it for a real spot.** Keep one job folder per job (`~/qc/jobs/<job>/`, a copy of
+`starter/`, or of `slate/`, which has more comments and a :30 spot) and edit (lines marked
+`# EDIT`):
 
 | file | edit |
 |---|---|
 | `job.yaml` | `job.id`, `agency`, `client`, `artist`; `product: "<empty>"` if your slates leave PRODUCT blank (a blank value means "not checked"); `naming_pattern`/`filename_regex` if your file names differ |
-| `deliverables.csv` | your rows: `Ad-ID`, `Title`, `Length` (seconds) |
-| `spec_spot_short.yaml` | `program_duration_frames` (:30 at 29.97 = `900`, :60 = `1800`), and codec / fps / audio if your delivery differs |
+| `deliverables.csv` | your rows: `Ad-ID`, `Title`, `Length` (seconds); the header names must match `columns:` in `job.yaml` |
+| `spec_starter.yaml` | `program_duration_frames` (:30 at 29.97 = `900`, :60 = `1800`), and codec / fps / audio if your delivery differs (quick start A) |
 
-Leave the slate template alone unless your slate has different labels (section 14).
+Leave the slate template alone unless your slate has different labels (section 14). For a
+review pass use the review rules: `cmr check media/*.mov --profile spot_review`.
 
 **What next:** all slate rules, the other profiles, the job file keys and the `--row` option:
 sections 5 and 14. Quality of the picture and sound checks, tuning: sections 9 to 11.
@@ -305,7 +533,8 @@ Goal: a problem was looked at and is fine (a deliberate fade to black, intention
 a client name spelt the client's way). Waive it so the next render of the same job does not
 flag it again. Waived findings stay visible in the report.
 
-We use the demo render of quick start A with planted defects (a 1-pixel black line on frames
+We use the demo review render of quick start A ([Without a job file](#without-a-job-file-a-review-render-with-a-spec-and-a-stock-profile):
+the `~/cmr_demo` folder with its edited spec) with planted defects (a 1-pixel black line on frames
 40-44, black frames, audio pushed into clipping). They are made with a few lines of Python
 (the generator is in `tests/`, see Appendix A); run in `~/cmr_demo`:
 
@@ -356,19 +585,20 @@ WAIVERS waivers.yaml: applied 1, content changed 0, stale 0, expired 0
 
 The clipping no longer counts; the WARNs are still there for you to look at.
 
-**In a job folder** (quick start B) it is shorter: `cmr check` finds `job.yaml`, writes the
-report into its `output:` folder and uses its `waivers.yaml` by itself, and `cmr waive` writes
-into that file and stamps each waiver with the job id, so it only applies to this job. Run in
-the `~/qc_demo` folder of quick start B, with the `Sample Bugrers` spot:
+**In a job folder** (quick starts A and B) it is shorter: `cmr check` finds `job.yaml`, writes
+the report into its `output:` folder and uses its `waivers.yaml` by itself, and `cmr waive`
+writes into that file and stamps each waiver with the job id, so it only applies to this job.
+Run in the `~/qc/my_first_job` folder of quick start B, with the `Sample Bugrers` spot and the
+review rules (`--profile spot_review`, where the typo is a WARN):
 
 ```
-cmr check spots_typo/client_typo/*.mov                      # WARN, exit 1
-cmr waive reports/cmr_report_latest.json                    # lists the findings
+cmr check ../spots_typo/client_typo/*.mov --profile spot_review    # WARN, exit 1
+cmr waive reports/cmr_report_latest.json                           # lists the findings
 cmr waive reports/cmr_report_latest.json --finding 15 --reason "Client spelling is intended in the slate"
 W0001: slate.content @ 00:59:53:01-00:59:57:28 (finding 15)
-waivers: ~/qc_demo/waivers.yaml (job demo_sb_league) (1 added, 1 total)
-cmr check spots_typo/client_typo/*.mov
-PASS    spots_typo/client_typo/SB X League 2026_ProRes Generic Submaster_QB Pat_03_ABCD1234567H_1920x1080_Slated.mov
+waivers: ~/qc/my_first_job/waivers.yaml (job demo_sb_league) (1 added, 1 total)
+cmr check ../spots_typo/client_typo/*.mov --profile spot_review
+PASS    ../spots_typo/client_typo/SB X League 2026_ProRes Generic Submaster_QB Pat_03_ABCD1234567H_1920x1080_Slated.mov
         30000/1001 fps, 300 frames, start TC 00:59:53:00 (file)
   SKIPPED captions.presence: captions not required by spec
   WAIVED  slate.content: slate CLIENT 'Sample Bugrers', expected 'Sample Burgers' @ 00:59:53:01-00:59:57:28 (frames 1-148)
@@ -420,8 +650,8 @@ takes the same three options.
 
 ```
 job_version: 1                 # always 1
-spec: spec_spot_short.yaml     # the spec sheet (paths are relative to the job file; ~ is allowed)
-profile: spot_review           # a stock profile name, or a path to your own .yaml
+spec: spec_starter.yaml        # the spec sheet (paths are relative to the job file; ~ is allowed)
+profile: spot_delivery         # a stock profile name, or a path to your own .yaml
 waivers: waivers.yaml          # the waiver file (default: waivers.yaml next to the job file; may not exist yet)
 output: reports                # report folder; also switches the JSON report on
 job:
@@ -432,8 +662,8 @@ slate: {...}                   # slated spots only: template and expectations (s
 ```
 
 A job without a slate only needs the first lines, e.g. `job_version`, `spec`, `profile`,
-`waivers`, `output`, `job: {id: ...}`. Examples: `templates/quickstart/job.yaml` (unedited
-demo), `templates/slate/job.yaml` (commented), `examples/spot_xr/`. See also
+`waivers`, `output`, `job: {id: ...}`. Examples: `templates/starter/job.yaml` (unedited
+demo; `templates/starter/job_no_slate.yaml` is a job without a slate), `templates/slate/job.yaml` (commented), `examples/spot_xr/`. See also
 [templates/README.md](templates/README.md). `cmr doctor` shows which job file the current
 folder has (and says `INVALID` with the reason if it does not load).
 
@@ -486,8 +716,11 @@ RESULT WARN (exit 0): PASS 19, WARN 3, WAIVED 1
 |---|---|---|
 | CPU priority | normal | nice 15 (lower) |
 | disk priority | normal | idle (`ionice -c 3`, Linux) |
-| ffmpeg filter threads | min(8, CPUs/2) | 2 |
-| memory | no limit | 16 GB virtual-memory cap for cmr and its ffmpeg |
+| ffmpeg filter threads | min(8, CPUs/2) (Mac: min(8, performance cores)) | 2 |
+| memory | no limit | 16 GB virtual-memory cap for cmr and its ffmpeg (Linux only) |
+
+On macOS background mode is nice 15 and 2 filter threads only: there is no I/O priority change
+and no memory cap (the operating system does not enforce one), and the log says so.
 
 Use `--mode background` on a Flame workstation while Flame is in use, and for overnight
 batches. It takes longer, mostly because of the 2 filter threads (the blanking and black-run
@@ -504,7 +737,7 @@ is recorded in the report (`summary.mode`).
 | `cmr waive ...` | create waivers (section 12) |
 | `cmr doctor` | installation check (section 20) |
 | `cmr logs path\|tail\|collect` | diagnostic log (section 15) |
-| `cmr --version` | prints `cmr 0.0.1` |
+| `cmr --version` | prints `cmr 0.1.0` |
 
 `cmr probe` (shortened and some lines joined):
 
@@ -803,7 +1036,7 @@ config error: profile 'typo' params invalid:
 ## 8. Spec sheets: the job facts
 
 One spec sheet per deliverable. Templates: `templates/specs/` (generic master, HD long form,
-spot short form, review render, colour interim without audio), `templates/quickstart/` and
+spot short form, review render, colour interim without audio), `templates/starter/` and
 `templates/slate/` (ad spots). Examples: `examples/`.
 
 ### All fields
@@ -838,7 +1071,7 @@ spot short form, review render, colour interim without audio), `templates/quicks
 | `audio.tracks` | list | audio.layout | below |
 | `audio.loudness.standard` | `"EBU R128"` | audio.loudness | must be a name in the profile's `standards` |
 | `audio.loudness.program_track` | `0` | audio.loudness | which audio stream carries the main mix (0 = first) |
-| `audio.loudness.programs` | list | audio.loudness | instead of `program_track`, for masters with one mono stream per channel: see "Loudness of multi-stream masters" below |
+| `audio.programs` | list | audio.loudness, audio.silence, audio.silent_channel, audio.clipping | the programs of a master with one mono stream per channel (`name`, `streams`, `channels`); used instead of `program_track`: see "Loudness of multi-stream masters" below. The older spelling `audio.loudness.programs` still works; giving both with different content is a config error |
 | `audio.allowed_silence` | list | audio.silence, audio.silent_channel | channels that are meant to be silent: see below |
 | `content.captions` | `{required: true, formats: [embedded_608]}` | captions.presence | `embedded_608`, `embedded_708`, `vanc_436m` (SMPTE 436M caption data in an MXF data track) |
 
@@ -929,16 +1162,26 @@ SKIPPED (see Troubleshooting).
 ### Loudness of multi-stream masters
 
 When the main mix is spread over mono streams (for example 8 streams: 5.1 on 1-6, stereo on
-7-8), name the groups in the spec instead of `program_track`:
+7-8), name the groups once in the spec as `audio.programs`, instead of `program_track`:
 
 ```
   audio:
     loudness:
       standard: "ATSC A/85"
-      programs:
-        - {name: "5.1", streams: [0, 1, 2, 3, 4, 5], channels: [L, R, C, LFE, Ls, Rs]}
-        - {name: stereo, streams: [6, 7]}
+    programs:
+      - {name: "5.1", streams: [0, 1, 2, 3, 4, 5], channels: [L, R, C, LFE, Ls, Rs]}
+      - {name: stereo, streams: [6, 7]}
 ```
+
+(The older spelling, `programs:` inside `audio.loudness`, still works.) Programs are used by
+every audio content check, not only loudness: `audio.silence` calls a program silent only when
+all its measured channels (LFE and `-` excluded) are below the threshold at the same time and
+gives one finding per program; `audio.silent_channel` names the channel by its role (`C`,
+`Ls`, ...); `audio.clipping` stays per stream but names program and role. Streams outside
+every program, and files without programs, are judged per stream. If a file has more than one
+audio stream and no programs (and no `program_track`), `audio.loudness` warns that only one
+stream was measured (profile parameter `undeclared_programs_severity`: `warn` by default, or
+`info`).
 
 `streams` are positions among the audio streams (from 0), merged in this order. `channels`
 names each merged channel (`L R C LFE Ls Rs`, `M` for mono, `-` to leave a channel out); if it
@@ -1188,6 +1431,37 @@ The profile's `severity` caps all classes (`review`: WARN).
 | `exclude_segments` | `[slate, bars_tone, two_pop]` | head/tail segments not judged; set your own list in the profile to change it |
 | `class_severity` | edge, edge_persistent, dark_edge, dark_edge_persistent: fail; matte: warn; matte_persistent: info | per-class severity (`pass`/`info`/`warn`/`fail`), capped by `severity` |
 
+**Stage 2: context analysis.** After the detector, each hit is looked at again in its
+surroundings (the edge strips of the frames before and after it are decoded) and the finding
+can only be **lowered**, never raised; the report keeps the original severity (`raw_severity`)
+and the evidence says `context: animation | transition | steady | unknown`:
+
+| context | what it means | default |
+|---|---|---|
+| `animation` | the band moves in a straight line over several frames (a zoom, a push-in, an animated bar), so it is picture content, not a mask error | INFO |
+| `transition` | the hit sits at a cut, or inside a dissolve or fade | INFO |
+| `steady` | the band keeps about the same depth: the signature of a masking error | unchanged |
+| `unknown` | not clear, or not analysed (over the caps) | unchanged |
+
+On real material (excerpts of a long broadcast master) this lowered about a third of the
+sharp-edge hits and none of the planted mask errors (measured on generated and planted-defect
+files). Cases it cannot tell apart stay at their severity: an animated resize error looks like
+animation; a one-frame band at a cut looks the same as a mask error switched on there. Cost:
+about 0.1 to 0.4 s per hit, capped.
+
+| parameter | default | meaning |
+|---|---|---|
+| `context_analysis` | true | stage 2 on/off |
+| `context_frames` | 12 | frames of context before and after each hit |
+| `context_severity` | animation `info`, transition `info`, steady and unknown `unchanged` | severity per context class (`pass`, `info`, `warn`, `fail`, `unchanged`; capped by what stage 1 gave) |
+| `max_context_candidates` | 300 | hits analysed per file (the rest are `unknown`) |
+| `context_max_seconds` | 600 | time budget per file |
+
+Finer knobs exist (`context_max_span_frames`, `context_depth_fraction`,
+`context_min_band_frames`, `context_min_motion_px`, `context_monotone`, `context_min_r2`,
+`context_cut_onset_frames`, `context_max_velocity_px`, `context_transition_gap`); leave them
+unless a reviewed case needs it.
+
 Known limits: tuned on one real H.264 file and planted defects; ProRes deliverables from Flame
 still UNVERIFIED. A real 1-pixel black line next to very dark picture (luma up to ~22) cannot be
 told from dark picture: it is reported as `dark_edge` (or `matte`), not lost - unless you set
@@ -1202,9 +1476,16 @@ All four measure the **program range only** (head and tail excluded), every fram
 | check id | what | parameters (`final`) | finding |
 |---|---|---|---|
 | `audio.loudness` | BS.1770 integrated loudness, loudness range and true peak of the main mix (`program_track`) | `standards` (per standard: `target_lufs`, `tolerance_lu`, `true_peak_max_dbtp`), optional `lra_max_lu` | integrated / true peak / LRA, each separately |
-| `audio.silence` | runs where every channel of a stream is below `threshold_dbfs` | `threshold_dbfs: -60`, `max_run_frames: 12` | per run |
+| `audio.silence` | runs where every channel of a stream (or of a declared program) is below `threshold_dbfs` | `threshold_dbfs: -60`, `max_run_frames: 12`, optional `warn_run_frames` | per run |
 | `audio.silent_channel` | a channel below `threshold_dbfs` for the whole program | `threshold_dbfs: -60` | per channel |
 | `audio.clipping` | frames where any channel's sample peak reaches `clip_dbfs` | `clip_dbfs: -0.1` | per run |
+
+**Silence tiers.** With one limit (`max_run_frames`; `final` 12, `release` 6, `review` 24) every
+run longer than it is a finding at the profile's severity. `broadcast_master` uses two tiers:
+`warn_run_frames: 6` and `max_run_frames: 30`. A run longer than `warn_run_frames` and up to
+`max_run_frames` is a WARN ("please listen"; short dips are common in long programs), a longer
+one (about 1 second at 30 fps) keeps the check's severity (FAIL). `warn_run_frames` must be
+smaller than `max_run_frames`, otherwise the single tier applies.
 
 Stock loudness presets: EBU R128 -23 LUFS +-1 LU (release: +-0.5), true peak max -1 dBTP;
 ATSC A/85 -24 LKFS +-2 LU, -2 dBTP. Every loudness message says
@@ -1362,8 +1643,13 @@ WAIVERS waivers.yaml: applied 2, content changed 0, stale 1, expired 0
 - **expired**: past its `expires` date; ignored and listed.
 
 How "same content" is decided: for picture, a 64-bit fingerprint of up to 8 frames of the
-range; re-encodes (ProRes to H.264) and regrain stay within the tolerance, a changed picture does
-not. For sound, the peak and RMS level of up to 16 frames per channel. Limits: a defect that
+range (fingerprint version 2: ffmpeg only decodes the luma plane, the reduction to a 9x8 grid
+and the hash are computed by cmr itself, so the result does not depend on the ffmpeg build and
+agrees between 8, 10 and 12-bit encodes of one picture); re-encodes (ProRes to H.264) and
+regrain stay within the tolerance, a changed picture does not. Waiver files made by older
+versions (fingerprint version 1) keep working and say so ("re-create the waiver to upgrade
+it"). A pixel format cmr cannot read as integers (float, bayer) falls back to version 1 with a
+WARN. Cost: about 1 s per video finding. For sound, the peak and RMS level of up to 16 frames per channel. Limits: a defect that
 grows on an unchanged picture (a 1-pixel line becoming 4 pixels) is not noticed; a change of
 sound at the same level is not noticed; content that moved in time is not matched (roadmap).
 
@@ -1523,7 +1809,7 @@ at the end of this section). Use the results as a second pair of eyes.
   `cmr doctor` shows which one is used. Without it every OCR check is an ERROR
   `slate not read: tesseract not found ...`; `slate.bars` and everything else still run.
 - A **job folder** with `job.yaml` (section 5) and the files it points to; starter sets are
-  `templates/quickstart/` (the unedited demo), `templates/slate/` (commented, :30 spot) and
+  `templates/starter/` (the unedited demo), `templates/slate/` (commented, :30 spot) and
   `examples/spot_xr/` (:60 spot, plus a "Label: value" variant):
   - the spec sheet: technical spec WITHOUT a `job:` section (the job constants live in `job.yaml`),
   - `job.yaml`: job id, job constants (agency, client, artist ...), the filename pattern, where
@@ -1686,7 +1972,7 @@ to support. `--log-private` (or `CMR_LOG_PRIVATE=1`) logs them in full, e.g. to 
 | option (before the sub-command) | meaning |
 |---|---|
 | `--log-level debug\|info\|warn\|error\|off` | default `info` (env `CMR_LOG_LEVEL`) |
-| `--log-file FILE` | default `$CMR_LOG_DIR/cmr.log`, else `~/.cache/cmr/logs/cmr.log` (Linux). On macOS the log will live in `~/Library/Logs/cmr` (planned, with the Mac version) |
+| `--log-file FILE` | default `$CMR_LOG_DIR/cmr.log`, else `~/.cache/cmr/logs/cmr.log` (Linux) or `~/Library/Logs/cmr/cmr.log` (macOS) |
 | `--log-private` | log names, paths and slate text verbatim |
 
 ```
@@ -1858,7 +2144,7 @@ Start with `cmr doctor`, then `cmr profiles show PROFILE --spec SPEC`.
 | `slate not read: tesseract not found ...` | slate checks without tesseract | install it (the installer does), set `CMR_TESSERACT`, section 14 |
 | `FAIL    slate.claims: slate LENGTH '15s' = 450 frames ... but the program is ...` | the slate says a different length than the file has | the slate or the file is wrong |
 | `WARN ... uncertain read ... check by eye` | OCR confidence under 60 | look at the slate frame at the timecode shown |
-| colour WARNs `(untagged)` on ProRes on Rocky only | ffprobe 5.1 reads the ProRes frame header, 6.1 falls back to the MOV tag | check the render's colour tagging; compare `cmr probe` on both machines |
+| colour WARNs `(untagged...)` on ProRes on Rocky only | ffprobe 5.1 reads the ProRes frame header, 6.1 falls back to the MOV tag | check the render's colour tagging; compare `cmr probe` on both machines; install without `--use-system-ffmpeg` (7.1.1 everywhere) |
 | `error: reports/... differs from the file in the report (identity)` from `cmr waive` | the media changed or moved since the report | re-run `cmr check`, then `cmr waive` from the same folder |
 
 ### Other things that go wrong
@@ -1872,8 +2158,11 @@ Start with `cmr doctor`, then `cmr profiles show PROFILE --spec SPEC`.
 
 ### ffmpeg versions
 
-Tested: 6.1.1 (Ubuntu) and 5.1.10 (Rocky 9.7), full test suite passing on both. Known
-difference: ProRes colour tags (above). Another ffmpeg build: point cmr at it with
+The tested version, installed by the installer on every machine: 7.1.1 (conda-forge). The full
+test suite also passes on 6.1.1 (Ubuntu) and 5.1.10 (Rocky 9.7), but results differ between
+versions; known difference: ProRes colour tags (above; ffprobe 5.1 reports them as unknown).
+Compare results only between machines with the same ffmpeg (`cmr doctor` warns when it is not
+7.1). Another ffmpeg build: point cmr at it with
 `cmr --ffmpeg PATH --ffprobe PATH ...` and run `cmr doctor` with the same options.
 
 ### Memory and CPU on a busy workstation
@@ -1934,9 +2223,6 @@ difference: ProRes colour tags (above). Another ffmpeg build: point cmr at it wi
 
 Roadmap, not available today:
 
-- **macOS.** Planned for Apple Silicon (M-series) Macs only; Intel Macs are not planned. The
-  code is Linux-first; the installer prints a polite "planned" message on a Mac, and the
-  diagnostic log will live in `~/Library/Logs/cmr` there.
 - **Dialogue-gated loudness** (as some US specs require). cmr measures BS.1770 relative-gated
   loudness and says so in every message; it is not a certified meter reading.
 - **Machine-learning review** of blanking and freeze-frame findings (fewer false alarms).
@@ -1971,7 +2257,7 @@ all cases:
 
 | case (folder) | what it is |
 |---|---|
-| `one_track/` | nothing wrong: ONE stereo track, no captions. The file of quick start A; matches `templates/specs/spec_review_render.yaml` after the edits of the quick start |
+| `one_track/` | nothing wrong: ONE stereo track, no captions. The file of quick start A ("Without a job file"); matches `templates/specs/spec_review_render.yaml` after the edits of the quick start |
 | `good/` | nothing wrong: two stereo tracks, embedded 608 captions (matches `tests/media/spec_test.yaml`, a spec that requires both) |
 | `wrong_meta/` | H.264 MP4, 720p, 25 fps, interlaced, mono AAC, no timecode, no captions |
 | `wrong_tc/` | timecode starts 24 frames late |
@@ -1979,7 +2265,9 @@ all cases:
 | `no_captions/` | captions missing |
 | `corrupt/` | damaged bytes in the middle |
 
-Slated spots for quick start B (needs Python with Pillow, numpy and PyYAML; writes to a folder
+Slated spots for quick starts A and B: the installer makes them in `~/cmr-workspace`
+(`templates/starter/media/`, `demo_spots/`; section 20). By hand (needs Python with Pillow, numpy
+and PyYAML, e.g. cmr's environment Python, see quick start A "Making the demo spots again"; writes to a folder
 outside the CheckMyRender folder): `python3 ~/CheckMyRender/tests/slate/make_spot.py OUTDIR
 --short` (clean + errors), `--defect NAME` (one planted error per folder, e.g. `client_typo`),
 `--layout label_colon` (the "Label: value" slate). Each run also writes `values.yaml` (the slate
@@ -2013,15 +2301,15 @@ PY
 
 `defects/`: 1-pixel black top line on frames 40-44, black frames 50-65, audio pushed into
 clipping near frame 70. `many/`: 14 one-frame top-line defects, every 3rd frame from 24.
-All examples with these files use the spec of quick start A (`specs/spec_showname_101.yaml`).
+All examples with these files use the spec of quick start A, "Without a job file" (`specs/spec_showname_101.yaml`).
 
 ---
 
-## 20. Installation (Rocky Linux)
+## 20. Installation (Rocky Linux and macOS)
 
 Requirements: section 1. The installer works per user (no sudo, never as root), needs network
 access to conda.anaconda.org (conda-forge packages only; no PyPI, no Anaconda `defaults`) and
-about 3 GB free disk space (2 GB with `--no-slate`). It never touches the system Python or the
+about 3.5 GB free disk space (2.5 GB with `--no-slate`; 0.5 GB less each with `--no-demo`). It never touches the system Python or the
 system ffmpeg, and never changes conda's base or other environments.
 
     tar xzf cmr-<version>-bundle.tar.gz
@@ -2034,25 +2322,52 @@ What it does:
   machine without conda);
 - creates its own environment ~/.local/share/cmr/env (Python 3.12, PyYAML, jsonschema, the cmr
   package, tesseract 5.5.2 for the slate checks; `--no-slate` skips tesseract, about 0.4 GB less on disk plus about 0.5 GB of package cache);
-- uses the system ffmpeg/ffprobe when they are 5.1 or newer and have every filter cmr needs
-  (Rocky 9: 5.1.10, accepted); otherwise it adds conda-forge ffmpeg 7.1.1 to the same
-  environment ~/.local/share/cmr/env (about 0.6 GB more; always the case on a Mac, which has no
-  system ffmpeg). An older install with a separate ~/.local/share/cmr/ffmpeg-env is migrated
-  automatically on the next run;
+- installs the pinned, tested conda-forge ffmpeg 7.1.1 into the same environment
+  ~/.local/share/cmr/env (about 0.6 GB), on every machine, so test results are comparable
+  between the Rocky workstations and the Mac. The system ffmpeg is not used (and not changed).
+  `--use-system-ffmpeg` uses it instead when it is 5.1 or newer and has every filter cmr needs
+  (Rocky 9: 5.1.10), and prints a warning that results may differ from 7.1.1 (e.g. Rocky's
+  ffprobe 5.1 reads ProRes colour tags as unknown); if it does not pass, 7.1.1 is installed
+  anyway. Give the flag on every run: a run without it (re-run, update) adds 7.1.1 to an install
+  that used the system ffmpeg (about 1 GB free space needed for that). An older install with a
+  separate ~/.local/share/cmr/ffmpeg-env is migrated automatically on the next run;
 - writes the launcher ~/.local/bin/cmr (`--bin-dir DIR` for another folder) and copies examples/,
   templates/ and this guide to ~/cmr-workspace (`--workspace DIR`); files you edited there are never
   overwritten, unedited ones are updated on upgrade;
-- ends with `cmr doctor` and a self-test on a generated clip. Log: ~/.cache/cmr/logs/install.log.
+- ends with `cmr doctor` and a self-test on a generated clip. Log: ~/.cache/cmr/logs/install.log;
+- makes the demo spots once (10-20 s; the generator `demo/make_spot.py` ships in the bundle
+  and runs with Pillow and numpy, which are added to cmr's environment for it): the clean
+  slated spot in ~/cmr-workspace/templates/starter/media/ (and demo_spots/clean/), the spots with
+  planted errors in ~/cmr-workspace/demo_spots/errors/ (client_typo/, many_errors/), about
+  60 MB each. A file that is already there is never overwritten, and a demo file you deleted
+  is not made again by a later run. If making them fails (e.g. no font found), the install
+  still succeeds with a warning and the command to make them by hand. `--no-demo` skips the
+  demo spots and Pillow/numpy.
+
+**macOS (Apple Silicon only).** The same `install.sh` works on a Mac (it runs on the system's
+bash 3.2; no sudo, no shell changes). It uses a conda you already have or offers Miniforge
+(`--bootstrap-conda`), and always installs ffmpeg 7.1.1 into cmr's environment. An Intel Mac, or
+a shell running under Rosetta, is refused before anything is changed. Differences: the
+diagnostic log is `~/Library/Logs/cmr/cmr.log` (`CMR_LOG_DIR` still overrides), background
+mode has no memory cap and no I/O priority (section 5), the filter-thread default counts
+performance cores only, and the launcher sets `TMPDIR` for cron and launchd runs. A bundle
+downloaded in a browser may carry the quarantine flag: remove it with
+`xattr -dr com.apple.quarantine cmr-<version>-bundle.tar.gz` before unpacking. `templates/automation/`
+holds a launchd example for overnight runs. File names, CSV cells and OCR text are normalised
+to Unicode NFC, so names typed on a Mac match. Results on a Mac and on Rocky agree on the
+test files (frame numbers and levels identical; OCR confidences differ slightly between
+builds and are never compared). Not yet verified: a LaunchAgent run end to end.
 
 If ~/.local/bin is not on your PATH the installer says so; add
 `export PATH="$HOME/.local/bin:$PATH"` to ~/.bashrc, or call ~/.local/bin/cmr by its full path.
 No `conda activate` is needed, also not in scripts or cron (verified with `env -i`). On macOS the launcher also sets TMPDIR to your per-user temp folder when it is unset (cron, launchd), because tesseract there cannot read files under /tmp; do not set `TMPDIR=/tmp` yourself.
 
 Other options: `--prefix DIR` (install location), `--upgrade` (refresh packages and reinstall cmr),
-`--uninstall` (asks; removes the environment and launcher, keeps your workspace and logs), `-y`.
+`--uninstall` (asks; removes the environment and launcher, keeps your workspace, its demo
+spots and the logs), `--no-demo`, `-y`.
 Exit codes: 0 done, 1 failed (log kept), 2 usage/unsupported platform, 3 cancelled.
-The demo-media scripts (tests/) are not in the bundle: the quick starts that generate media need a
-checkout of the repository.
+`tests/media/make_media.py` (the review renders of quick starts A "Without a job file" and C) is
+not in the bundle: those examples need a checkout of the repository.
 
 ### Updating
 Unpack the new bundle and run its install.sh: it upgrades in place, updates the workspace files you
@@ -2062,15 +2377,18 @@ did not edit and keeps the ones you did. Same version again: re-checks only (sec
 
 `cmr doctor` checks ffmpeg, ffprobe, tesseract and every ffmpeg filter the checks need, and
 prints the log location and whether the current folder holds a `job.yaml`. On the Rocky 9 test
-machine (28 check lines, most left out here; paths shortened):
+machine with the system ffmpeg (an install made with `--use-system-ffmpeg`; 28 check lines,
+most left out here; paths shortened):
 
 ```
 cmr --version
-cmr 0.0.1
+cmr 0.1.0
 cmr doctor
 ffmpeg: /usr/bin/ffmpeg
 ffprobe: /usr/bin/ffprobe
 ffmpeg version: ffmpeg version 5.1.10 Copyright (c) 2000-2026 the FFmpeg developers
+WARNING: ffmpeg 5.1 is not the tested version 7.1.1: results may differ from other machines (the installer installs 7.1.1 unless --use-system-ffmpeg)
+WARNING: ffprobe 5.1 is not the tested version 7.1.1: results may differ from other machines (the installer installs 7.1.1 unless --use-system-ffmpeg)
 tesseract (slate checks): /home/USER/.../env/bin/tesseract
 check audio.clipping: ok
 check audio.format: ok
@@ -2081,9 +2399,12 @@ job.yaml in the current folder: none
 OK
 ```
 
-`OK` and exit code 0 = ready. `PROBLEMS FOUND` (exit 3) lists what is missing, e.g.
+`OK` and exit code 0 = ready. `PROBLEMS FOUND` (exit 3) lists what is missing or broken, e.g.
 `check video.blanking: MISSING filters lut2`. Without tesseract the line reads
 `tesseract (slate checks): NOT FOUND - ...`; that does not stop `OK` (only slate checks need it).
+The `WARNING: ... is not the tested version 7.1.1` lines do not stop `OK` either: cmr works with
+ffmpeg 5.1 and newer, but only 7.1.1 gives results you can compare with other machines.
 In a folder with a `job.yaml`, the last line shows `job.yaml in the current folder: PATH (job
-ID)`, or `- INVALID: ...` with the reason.
+ID)`, or `- INVALID: ...` with the reason; an invalid `job.yaml` also gives `PROBLEMS FOUND`
+and exit 3, because a `cmr check` in that folder would fail the same way.
 

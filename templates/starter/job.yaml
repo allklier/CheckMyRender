@@ -1,0 +1,50 @@
+# =====================================================================================
+# JOB FILE - starter folder, slated spot (works unedited with the generated demo spot)
+# =====================================================================================
+# job.yaml is the one file that says everything about a job. Run cmr in the folder that
+# holds it and no other option is needed:
+#
+#   cmr check media/*.mov
+#
+# It names the spec sheet, the profile, the deliverables list, the slate template, the
+# waiver file and the report folder. Paths are relative to THIS file. An option on the
+# command line always wins (e.g. `--profile spot_review`, `-o other_folder`).
+# No slate, or no deliverables list? Use job_no_slate.yaml:  cmr check media/*.mov --job job_no_slate.yaml
+#
+# For a real job: copy the whole starter folder, then edit the lines marked EDIT here,
+# in spec_starter.yaml, deliverables.csv and (for another slate design) the slate template.
+#
+# Values:  blank = not specified = not checked.  "<empty>" = the slate field must be empty.
+# Tokens:  {job.x} = a value from the job: section, {row.x} = a column of the CSV row picked
+#          for the file, {file.x} = a part of the filename (named group of filename_regex).
+# All names below are fictional; they match the demo spot (tests/slate/values_fictional.yaml).
+# =====================================================================================
+job_version: 1                       # always 1
+
+spec: spec_starter.yaml              # technical spec sheet (codec, fps, head layout, audio)
+profile: spot_delivery               # rules: stock profile name, or a path to your own .yaml;
+                                     #   spot_delivery = strict delivery QC (everything FAIL),
+                                     #   spot_review = faster review pass (loudness/bars warn)
+waivers: waivers.yaml                # accepted findings (`cmr waive` writes it; may not exist yet)
+output: reports                      # JSON reports go here (cmr_report_latest.json + one per run)
+
+job:
+  id: demo_sb_league                 # EDIT: short job id (letters, digits, _ - .): on waivers and reports
+  agency: Northwind Advertising      # EDIT: slate AGENCY must read this
+  client: Sample Burgers             # EDIT: slate CLIENT must read this
+  product: "<empty>"                 # EDIT: slate PRODUCT ("<empty>" = must be empty; blank = not checked)
+  artist: Alex Example               # EDIT: slate ARTIST (optional on the slate)
+  uses_ad_id: true                   # filenames and slates carry an Ad-ID
+  # expected filename, built from the CSV row + filename parts + the profile tag {resolution}
+  naming_pattern: "{row.title}_{row.length}_{row.ad_id}_{resolution}_{file.variant}.mov"   # EDIT
+
+deliverables:                        # the list of spots in this job (one CSV row per spot)
+  csv: deliverables.csv              # EDIT: your list (no filenames in it)
+  columns: {ad_id: "Ad-ID", title: "Title", length: "Length", version: "Version"}   # name: CSV header
+  key: ad_id                         # the Ad-ID in the filename selects the row
+  match: both                        # ... and the filename check verifies the whole name
+  # how to cut a filename into parts: (?P<name>...) groups become {file.name}   # EDIT with naming_pattern
+  filename_regex: '(?P<title>.+)_(?P<length>\d+)_(?P<ad_id>[A-Z0-9]{11}[HD]?)_(?P<resolution>\d+x\d+)_(?P<variant>Slated|Unslated)\.mov'
+
+slate:
+  template: slates/slate_template.yaml   # which labels the slate has and what each must read

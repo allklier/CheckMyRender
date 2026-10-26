@@ -1,6 +1,21 @@
 #!/bin/bash
-# Fake env python: only `-m pip install ... WHEEL` and `-m pip check`.
+# Fake env python: only `-m pip install ... WHEEL`, `-m pip check` and the demo generator
+# (`python .../make_spot.py OUTDIR --short [--defect client_typo]`: writes small stand-in spots
+# like the real one; FAKE_DEMO_FAIL=1 fails like a missing font).
 echo "python $* PYTHONPATH=${PYTHONPATH:-unset} PIP_CONFIG_FILE=${PIP_CONFIG_FILE:-unset}" >>"$FAKE_CALLS"
+if [ "$(basename "${1:-}")" = make_spot.py ]; then
+    echo "make_spot ffmpeg=$(command -v ffmpeg)" >>"$FAKE_CALLS"
+    [ -n "${FAKE_DEMO_FAIL:-}" ] && { echo "make_spot: no font found; set \$CMR_TEST_FONT to a .ttf file" >&2; exit 1; }
+    out=$2 n="SB X League 2026_QB Pat_03_ABCD1234567H_1920x1080_Slated.mov"
+    if [ "${4:-}" = --defect ]; then
+        mkdir -p "$out/$5" && echo "spot $5" >"$out/$5/$n"
+    else
+        mkdir -p "$out/clean" "$out/errors" && echo "clean spot" >"$out/clean/$n"
+        echo "errors spot" >"$out/errors/SB X League 2026_QB Pat_03_ABCD1234567H_1280x720_Slated.mov"
+    fi
+    echo "manifest" >"$out/manifest.yaml"; echo "values" >"$out/values.yaml"
+    exit 0
+fi
 if [ "$1 $2 $3" = "-m pip install" ]; then
     cp "$FAKES/cmr" "$(dirname "$0")/cmr"; chmod +x "$(dirname "$0")/cmr"
 fi

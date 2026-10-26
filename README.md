@@ -1,11 +1,13 @@
 # CheckMyRender
 
-Video QC suite for Rocky Linux (macOS on Apple Silicon is planned). Command-line QC for renders out of
+Video QC suite for Rocky Linux and macOS on Apple Silicon. Command-line QC for renders out of
 Flame and other finishing apps: an idiot-check that speeds up delivery without missing errors. It checks
 the settings of a file against a delivery spec, and inspects picture, sound and the slate of ad spots.
 
-> **Status: 0.0.1, work in progress.** Core and checks work on generated test media and on a few real
-> files; not yet validated broadly on real renders. Use it as a second pair of eyes. Expect changes.
+> **Status: 0.1.0, the first verified release.** Tested on generated media and on real renders (Rocky Linux 9 and
+> Apple Silicon macOS, ffmpeg 7.1.1). Use it as a second pair of eyes, not as the final authority: the blanking
+> check in particular is noisy on long-form material until the planned ML verifier. Known limits and the next
+> steps are in [TODO.md](TODO.md).
 
 ## What it checks (today)
 - **Settings vs spec:** container, codec/profile (ProRes, H.264, DNxHD/HR), resolution, pixel format,
@@ -20,9 +22,9 @@ the settings of a file against a delivery spec, and inspects picture, sound and 
   Ad-ID, title, length, date), the real file and the colour bars.
 - Every problem is reported with **timecode and frame number**.
 
-Not built yet: macOS (Apple Silicon only, planned), dialogue-gated loudness, ML false-positive
+Not built yet: dialogue-gated loudness, ML false-positive
 reduction, image sequences, caption sidecars and caption quality, stems, stills, freeze frames, HTML/JUnit
-reports. See [CLAUDE.md](CLAUDE.md) for the roadmap and design decisions.
+reports. See [TODO.md](TODO.md) for the roadmap and [CLAUDE.md](CLAUDE.md) for the design decisions.
 
 ## How it works
 - **Profile** (YAML, `profiles/`): the rules - which checks run, tolerances, severities. 11 stock profiles
@@ -38,19 +40,42 @@ reports. See [CLAUDE.md](CLAUDE.md) for the roadmap and design decisions.
   Exit code 0 pass, 1 warn, 2 fail, 3 tool/config error or wrong command line.
 
 ## Quick start
+
+### Install
 The easy way on a Rocky workstation is the per-user installer (no sudo; it builds its own conda
-environment, uses the system ffmpeg when it is good enough and installs tesseract for the slate checks).
+environment with the pinned, tested ffmpeg 7.1.1 (the same on every machine, so results are comparable)
+and tesseract for the slate checks; `--use-system-ffmpeg` uses the system ffmpeg instead, with a warning
+that results may differ).
 You get a bundle `cmr-<version>-bundle.tar.gz`:
 
 ```
-tar xzf cmr-0.0.1-bundle.tar.gz
-cmr-0.0.1/install.sh --dry-run        # shows every step, changes nothing
-cmr-0.0.1/install.sh
+tar xzf cmr-0.1.0-bundle.tar.gz
+cmr-0.1.0/install.sh --dry-run        # shows every step, changes nothing
+cmr-0.1.0/install.sh
 cmr doctor
 ```
 
-(The installer's first real run is still in progress: USERGUIDE.md section 20 has the status.) It also
-copies `examples/` and `templates/` to `~/cmr-workspace`. Never change the system Python on a Flame machine.
+(The installer has been run for real on Rocky Linux and on Apple Silicon macOS: USERGUIDE.md section 20.) It also
+copies `examples/` and `templates/` to `~/cmr-workspace` and makes demo spots there (`--no-demo` skips them).
+Never change the system Python on a Flame machine.
+
+### First check: the starter folder
+The starter folder is a complete job folder for an HD ad spot, and after the installer its `media/`
+already holds a clean demo spot. Copy it, check the demo (PASS in seconds), swap in a spot with
+errors, then use your own video:
+
+```
+mkdir -p ~/qc && cp -r ~/cmr-workspace/templates/starter ~/qc/my_first_job && cd ~/qc/my_first_job
+cmr check media/*.mov                         # PASS (exit 0); reads the slate (tesseract)
+cmr check media/*.mov --job job_no_slate.yaml # PASS without slate reading
+rm media/*.mov && cp ~/cmr-workspace/demo_spots/errors/client_typo/*.mov media/
+cmr check media/*.mov                         # FAIL slate.content: slate CLIENT 'Sample Bugrers' (exit 2)
+rm media/*.mov && cp /path/to/your_render.mov media/
+cmr check media/*.mov --job job_no_slate.yaml # your render (no slate reading yet)
+```
+
+`~/cmr-workspace/demo_spots/errors/many_errors/` has a spot with many planted errors. Steps and how to
+read the result: [templates/starter/README.md](templates/starter/README.md), USERGUIDE.md quick start A.
 
 From a source checkout instead (Python 3.12+ in a conda environment, ffmpeg and ffprobe on the PATH):
 
@@ -60,7 +85,34 @@ pip install .                         # or: pip install -e .  (both carry the st
 cmr doctor
 ```
 
-First check, with no real media needed (the demo scripts are in this repo's `tests/` folder):
+### Run a first check on your own render
+Copy a sample set, edit it for your job, and point `cmr` at your file. Samples (all fictional values):
+
+| What | Sample |
+|---|---|
+| Spec sheets (job data) | [examples/spec_review.yaml](examples/spec_review.yaml), [examples/spec_hd_broadcast.yaml](examples/spec_hd_broadcast.yaml), [examples/spec_spot_30s.yaml](examples/spec_spot_30s.yaml), more in [templates/specs/](templates/specs/) |
+| Profiles (rules) | stock ones ship with the tool (`cmr profiles list`: `review`, `release`, `spot_review`, ...); client starters in [templates/profiles/](templates/profiles/) |
+| job.yaml (one file that names spec, profile, CSV, waivers) | [templates/starter/job.yaml](templates/starter/job.yaml), a slated-spot job in [examples/spot_xr/job.yaml](examples/spot_xr/job.yaml) |
+
+Without a job file (spec + stock profile):
+
+```
+cmr check /path/to/render.mov --profile review --spec my_spec.yaml
+```
+
+With a job file (run it in the folder that holds `job.yaml`; it needs no other options):
+
+```
+cd ~/qc_job && cmr check /path/to/render.mov
+cmr check /path/to/render.mov --job /path/to/job.yaml     # or from anywhere
+```
+
+The console shows the verdict. For a JSON report as well, add `--report json` (written to the current folder, or `-o DIR`), or set `output:` in a job file.
+The user guide's quick starts A-C walk through this step by step.
+
+### Test media (optional, if you have no render at hand)
+Most people will use real media and can skip this. The demo scripts are in this repo's `tests/` folder
+and generate small clips with ffmpeg:
 
 ```
 mkdir -p ~/cmr_demo && cd ~/cmr_demo
@@ -68,11 +120,13 @@ python3 ~/CheckMyRender/tests/media/make_media.py . one_track        # one demo 
 cmr probe one_track/*.mov                                            # what is in it
 ```
 
-then follow the user guide's quick start A (copy a spec template, edit five lines, run
-`cmr check one_track/*.mov --profile review --spec ...`). A slated ad spot: quick start B, which uses
-the ready-made job folder `templates/quickstart/` (`cp -r templates/quickstart ~/qc_demo`, make the demo
-spot with `tests/slate/make_spot.py spots --short`, then `cmr check spots/clean/*.mov` in that folder).
+From a source checkout (no installer, so no demo spots in the workspace), make the slated demo spots
+with `tests/slate/make_spot.py` (needs a Python with Pillow and numpy; output outside the repo):
+`python3 tests/slate/make_spot.py ~/qc/spots --short` writes `spots/clean/` and `spots/errors/`
+(`--defect client_typo` into another folder: the slate-typo spot). Then `cp -r templates/starter ~/qc/my_first_job`,
+copy `spots/clean/*.mov` into its `media/` folder and run `cmr check media/*.mov` there.
 
+### More options
 Run modes: `--mode foreground` (default) is the fastest; `--mode background` lowers CPU and I/O priority,
 uses fewer ffmpeg threads and caps memory, for use while other apps (e.g. Flame) are busy.
 `--quality fast|high` overrides the profile's quality for the checks that have a fast mode.

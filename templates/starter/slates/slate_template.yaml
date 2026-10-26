@@ -1,5 +1,5 @@
 # =====================================================================================
-# SLATE TEMPLATE - quick start  (SLATE CHECKS: IN DEVELOPMENT)
+# SLATE TEMPLATE - starter folder  (SLATE CHECKS: IN DEVELOPMENT)
 # =====================================================================================
 # Describes ONE slate design: a label column (right-aligned) and a value column
 # (left-aligned), colour bars along the top, grey steps along the bottom, a countdown
@@ -23,7 +23,7 @@
 #            step, left to right (measure them once on a known-good render)
 # =====================================================================================
 template_version: 1                  # always 1
-name: quickstart_slate               # matches the generated demo spot's slate
+name: starter_slate                  # matches the generated demo spot's slate (EDIT for your design)
 
 fields:
   AGENCY:   {expect: "{job.agency}"}

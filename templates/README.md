@@ -3,9 +3,14 @@
 Starting points for your own QC setup. **Copy, then edit the copy**; do not edit the files
 here or in `profiles/` (an update of CheckMyRender would overwrite them). Every file is
 commented line by line. The full explanation of every field is in the user guide, `USERGUIDE.md`
-([link](../USERGUIDE.md) in a CheckMyRender folder; the installer's `~/cmr-workspace` copy of
-this folder does not include the guide: open the one from your CheckMyRender folder). The
+([link](../USERGUIDE.md) in a CheckMyRender folder; the installer also copies it to
+`~/cmr-workspace/USERGUIDE.md`). The
 guide's quick starts (A: any render, B: slated spot, C: waivers) use these files.
+
+**New here? Start with `starter/`**: one folder with everything for one broadcast deliverable
+(copy it and run `cmr check media/*.mov`: after the installer its `media/` already holds a clean
+demo spot; then try the spots in `~/cmr-workspace/demo_spots/errors/` and your own video; steps in
+`starter/README.md`).
 
 Where this folder is: `templates/` in the CheckMyRender folder, or `~/cmr-workspace/templates`
 after the installer. Commands below are written for either; the guide calls it `TEMPLATES`.
@@ -14,7 +19,7 @@ after the installer. Commands below are written for either; the guide calls it `
 
 | Situation | Spec sheet (job facts) | Profile (rules) | Extra |
 |---|---|---|---|
-| First try, nothing to edit: the generated demo spot (`make_spot.py spots --short`, a script of the repo's `tests/` folder, needs Pillow + numpy) | `quickstart/spec_spot_short.yaml` | stock `spot_review` (named in `quickstart/job.yaml`) | the whole `quickstart/` folder: copy it, add the demo media, run `cmr check spots/clean/*.mov` in it |
+| First try: one folder with everything for an HD ad spot. Works unedited with the demo spot, which the installer already put into its `media/` (spots with planted errors: `~/cmr-workspace/demo_spots/errors/`; in a source checkout make them with `tests/slate/make_spot.py spots --short`); with your own render, edit the spec until a known-good render passes | `starter/spec_starter.yaml` | stock `spot_delivery` (`starter/job.yaml`), `release` (`starter/job_no_slate.yaml`) | the whole `starter/` folder: copy it, put the video into `media/`, run `cmr check media/*.mov` in it. Steps: `starter/README.md` |
 | Check a render right after it comes out of Flame (settings only, fast) | any spec below | `profiles/client_render_check.yaml` | |
 | Client / internal review render | `specs/spec_review_render.yaml` | `profiles/client_review.yaml` (or stock `review`) | |
 | Final master or deliverable, file-based | `specs/spec_master_generic.yaml` | `profiles/client_delivery.yaml` (or stock `release`) | `waivers/waivers_example.yaml` |
@@ -49,7 +54,7 @@ A `job.yaml` names everything a job needs: the job id, the spec sheet, the profi
 deliverables CSV and slate template (slated spots), the waiver file and the report folder
 (paths relative to the job.yaml). Run `cmr check RENDER.mov` in that folder and no other
 option is needed; `--job PATH/job.yaml` or `--job-dir PATH` work from anywhere, and an option
-on the command line always wins. Examples: `quickstart/job.yaml` (unedited demo),
+on the command line always wins. Examples: `starter/job.yaml` (unedited demo; `starter/job_no_slate.yaml` without slate),
 `slate/job.yaml` (commented, :30 spot). For a job without a slate the job file only needs:
 
     job_version: 1

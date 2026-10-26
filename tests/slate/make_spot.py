@@ -8,6 +8,8 @@ Default: OUTDIR/clean/<TITLE>.mov and OUTDIR/errors/<name>.mov (all ERRORS_SET d
 --defect NAME (repeatable): one file in OUTDIR/<NAME+NAME>/ with only those defects.
 Every run writes OUTDIR/values.yaml (slate text per file) and OUTDIR/manifest.yaml (planted
 errors: frames, timecode, checks that should catch them). OUTDIR must be outside the repo.
+The release bundle ships this file as demo/make_spot.py (+ values_fictional.yaml); install.sh
+runs it to create the demo spots in the workspace (installer/CLAUDE.md "Demo spots").
 --values: slate field values (default tests/slate/values_fictional.yaml; real-client values
 belong in a private file outside the repo). TITLE = filename stem.
 
@@ -449,7 +451,9 @@ def main(argv):
     ap.add_argument("--defect", action="append", default=[], choices=list(DEFECTS))
     a = ap.parse_args(argv)
     outdir = Path(a.outdir).resolve()
-    if outdir == REPO or REPO in outdir.parents:
+    # only in a source checkout: in a release bundle (<bundle>/demo/make_spot.py) REPO is the
+    # bundle's parent folder, which may well hold the installer's workspace
+    if (REPO / "pyproject.toml").is_file() and (outdir == REPO or REPO in outdir.parents):
         raise SystemExit(f"refusing to write media into the repo ({REPO})")
     a.values = a.values or str(Path(__file__).with_name(
         "values_label_colon.yaml" if a.layout == "label_colon" else "values_fictional.yaml"))

@@ -21,7 +21,14 @@ Portability (ffmpeg 5.1 on Rocky 9 and 6.1 locally; details src/cmr/CLAUDE.md):
 (all defects except `slate_4s`); `--defect` (repeatable) writes one file to OUTDIR/<NAME+NAME>/.
 Each run writes OUTDIR/values.yaml (slate text per file: frames 0-119 and the last countdown
 second 120-149, render date, measured loudness) and OUTDIR/manifest.yaml (each planted defect:
-frames, timecode, checks that should catch it, `detectable_now`). Refuses OUTDIR inside the repo.
+frames, timecode, checks that should catch it, `detectable_now`). Refuses OUTDIR inside the repo
+(only when `<parents[2]>/pyproject.toml` exists, i.e. in a checkout).
+- Also the installer's demo generator: build_bundle.sh copies make_spot.py + values_fictional.yaml
+  into the bundle as `demo/` (this file is the single source; keep it runnable with only numpy,
+  Pillow, PyYAML and ffmpeg on PATH), and install.sh runs `--short` and `--short --defect
+  client_typo` once into the workspace (installer/CLAUDE.md "Demo spots"). A change to the CLI,
+  the output folder names (`clean/`, `errors/`, `<defect>/`) or `manifest.yaml` must be mirrored
+  in install.sh step 10 and in the fake `tests/installer/fakes/python`.
 - Layout: 1920x1080 ProRes 422 HQ, 30000/1001 NDF, tmcd 00:59:53:00; slate 150 (countdown 5..1)
   + black 60 -> program at frame 210 = 01:00:00:00, 1800 frames, no tail (2010 frames). One
   stereo 48k pcm_s24le stream: silent head except a 2-pop (1 kHz, -20 dBFS, frame 150);
@@ -182,9 +189,11 @@ foreign lines, doctor log + job.yaml lines, suite runner `--quality` / `--meta` 
 `tests/test_job_media.py` (job folder: `cmr check FILE` with no options, options override,
 `--job-dir`, pre-D31 form; waive -> job-stamped entry -> WAIVED; other job id -> foreign; report
 of another job refused; `--any-job` category; waiver files without `job`; missing-key message;
-quick start A with `one_track`), `tests/test_quickstart_media.py` (templates/quickstart copied
-unedited + make_spot `--short` media: without tesseract only the 4 OCR checks ERROR; with
-tesseract the clean spot passes, exit 0; verified on the Rocky machine).
+quick start A with `one_track`), `tests/test_starter_media.py` (templates/starter, which
+superseded templates/quickstart: all files present and both job files load with their profile
+(no media); copied unedited + make_spot `--short` media in media/: without tesseract only the 4
+OCR checks ERROR; `--job job_no_slate.yaml` passes (exit 0, filename PASS, no slate checks); with
+tesseract the clean spot passes (exit 0) and the errors spot FAILs slate.content (exit 2)).
 
 ## macOS (D32) and other ffmpeg builds - tests
 - Run on the Mac: see src/cmr/CLAUDE.md "macOS" (env python, `CMR_TESSERACT`, `CMR_TEST_MEDIA`;

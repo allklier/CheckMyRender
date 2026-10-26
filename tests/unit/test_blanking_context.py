@@ -124,10 +124,107 @@ def test_transition_far_from_hit_is_not_used():
 
 
 def test_band_run_stops_at_cut():
-    # previous shot pillarboxed (148), cut at 12, then a Ken Burns from 1 px growing
+    # previous shot pillarboxed (148), cut at 12, then a band growing from 1 px: the run stops
+    # at the cut; since the band starts AT the cut it is not excused (user-labelled defect)
     track = [148] * 12 + [1 + 2 * i for i in range(20)]
     r = classify(frames_from(track), 12, 18, cuts=[12])
-    assert r["band_run"][0] == 12 and r["context"] == "animation"
+    assert r["band_run"][0] == 12 and r["cut_onset"] == 0
+    assert r["context"] != "animation" and r["animation_guard"] == ["cut_onset"]
+
+
+# --- guards from user labels on a real long-form master (features of the 4 labelled defects;
+#     each was linear enough to pass the animation rule and was lowered before the guards) ---
+def test_defect_band_at_cut_shrinking_away_stays():
+    # image cut in with its first move keyframe too loose: 33 px band from the cut, gone in 8
+    track = [0] * 12 + [33, 27, 27, 21, 15, 9, 5, 5, 1] + [0] * 12
+    r = classify(frames_from(track), 16, 20, cuts=[12])
+    assert r["cut_onset"] == 1 and r["animation_guard"] == ["cut_onset"]
+    assert r["trend_r2"] >= P["context_min_r2"] and r["monotone"] == 1.0   # looked like animation
+    assert r["context"] not in ("animation", "transition")
+
+
+def test_defect_band_at_cut_growing_stays():
+    # previous shot pillarboxed, cut, band grows 1 -> 36 px (symmetric on both sides)
+    after = [1, 2, 2, 4, 6, 8, 10, 10, 12, 14, 17, 19, 19, 21, 23, 25, 27, 27, 29, 32, 34, 36]
+    track = [148] * 12 + after
+    r = classify(frames_from(track, opp=[170] * 12 + after), 12, 21, cuts=[12])
+    assert r["cut_onset"] == 0 and r["context"] not in ("animation", "transition")
+
+
+@pytest.mark.parametrize("grow", [[4, 20, 37, 37, 54, 73, 91, 105, 105, 121, 123, 123, 123],
+                                  [14, 29, 29, 43, 58, 73, 89, 89, 106, 108, 108, 108, 108]])
+def test_defect_fast_reveal_stays(grow):
+    # mid-shot (no cut detected), the band appears and grows ~15 px per frame, outer line
+    # jumps from bright picture to black (onset jump ~170)
+    track = [0] * 12 + grow
+    outer = [186.0] * 12 + [16.0] * len(grow)
+    r = classify(frames_from(track, outer=outer), 12, 12)
+    assert r["velocity_px"] > P["context_max_velocity_px"]
+    assert r["animation_guard"] == ["fast_move"] and r["context"] == "steady"
+
+
+def test_slow_mid_shot_move_from_zero_is_still_animation():
+    # zoom-out of a still revealing pillars smoothly (2 px per frame), no cut: excused
+    track = [0] * 12 + [2, 3, 3, 5, 7, 9, 11, 11, 12, 14, 16, 18, 18, 20, 22, 23, 25]
+    r = classify(frames_from(track), 12, 22)
+    assert r["context"] == "animation" and "animation_guard" not in r and r["cut_onset"] is None
+
+
+def test_band_continuing_across_a_cut_is_not_cut_onset():
+    # same depth on both sides of a detected cut (held-frame montage): not a new band
+    track = [30 - i for i in range(30)]
+    r = classify(frames_from(track), 18, 24, cuts=[14])
+    assert r["cut_onset"] is None and r["context"] == "animation"
+
+
+SHRINK_TO_CUT = [
+    # (track, hit frame, cut frame, frames between band end and cut): bands shrinking to 0
+    # right before a cut (two edges of one real event; user: can't tell -> mirror of cut_onset)
+    ([13, 12, 11, 10, 9, 9, 9, 8, 7, 6, 6, 5, 4, 3, 2, 2, 1] + [0] * 12, 16, 19, 2),
+    ([14, 13, 12, 11, 11, 10, 9, 8, 7, 7, 6, 5, 4, 3, 3, 2, 1] + [0] * 12, 16, 18, 1)]
+
+
+@pytest.mark.parametrize("track,hit,cut,gap", SHRINK_TO_CUT)
+def test_band_ending_right_before_cut_stays(track, hit, cut, gap):
+    r = classify(frames_from(track), hit, hit, cuts=[cut])
+    assert r["cut_end"] == gap and r["animation_guard"] == ["cut_end"]
+    assert r["trend_r2"] >= P["context_min_r2"] and r["monotone"] == 1.0   # looked like animation
+    # a 1-frame hit within 2 frames of the cut: not excused as a cut-frame transition either
+    assert r["context"] == "steady"
+
+
+def test_band_ending_well_before_cut_is_still_animation():
+    track, hit, cut, _ = SHRINK_TO_CUT[0]
+    r = classify(frames_from(track), hit, hit, cuts=[cut + 6])
+    assert r["cut_end"] is None and r["context"] == "animation"
+
+
+def test_band_continuing_across_a_cut_is_not_cut_end():
+    # held-frame montage: a cut is detected but the band goes on with the same depth
+    track = [40 - i for i in range(30)]
+    r = classify(frames_from(track), 10, 15, cuts=[18])
+    assert r["band_run"][1] == 17 and r["cut_end"] is None and r["context"] == "animation"
+
+
+def test_short_unmoving_band_at_cut_still_transition_with_guards():
+    # the field-mixed cut frame (1 frame, no motion) keeps the cut transition rule
+    track = [0] * 12 + [1] + [0] * 12
+    r = classify(frames_from(track, outer=[33.0] * 12 + [31.0] + [60.0] * 12), 12, 12, cuts=[13])
+    assert r["cut_end"] == 0 and r["context"] == "transition"
+
+
+def test_guard_thresholds_are_params():
+    track, hit, cut, _ = SHRINK_TO_CUT[0]
+    p = C.params_with_defaults({"context_cut_end_frames": 1})
+    r = classify(frames_from(track), hit, hit, cuts=[cut], p=p)
+    assert r["cut_end"] is None and r["context"] == "animation"
+    track = [0] * 12 + [33, 27, 27, 21, 15, 9, 5, 5, 1] + [0] * 12
+    p = C.params_with_defaults({"context_cut_onset_frames": 0})
+    r = classify(frames_from(track), 16, 20, cuts=[12], p=p)
+    assert r["cut_onset"] is None and r["context"] == "animation"
+    p = C.params_with_defaults({"context_max_velocity_px": 20})
+    r = classify(frames_from([0] * 12 + [4, 20, 37, 37, 54, 73, 91, 105]), 12, 12, p=p)
+    assert r["context"] == "animation"
 
 
 def test_symmetry_reported():

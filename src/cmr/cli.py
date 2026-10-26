@@ -30,6 +30,7 @@ import io
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import tarfile
@@ -463,6 +464,19 @@ def cmd_profiles(a) -> int:
     return EXIT_PASS
 
 
+TESTED_FFMPEG = "7.1.1"   # the ffmpeg the installer pins on every machine (installer/environment.yml)
+
+
+def untested_ffmpeg_note(name: str, version_line: str) -> str | None:
+    """A WARNING line when `<name> -version`'s first line is not ffmpeg 7.1.x (never a problem)."""
+    m = re.search(r" version n?(\d+)\.(\d+)", version_line)
+    if m and f"{m[1]}.{m[2]}" == TESTED_FFMPEG.rsplit(".", 1)[0]:
+        return None
+    got = f"{m[1]}.{m[2]}" if m else "unreadable"
+    return (f"WARNING: {name} {got} is not the tested version {TESTED_FFMPEG}: results may differ "
+            f"from other machines (the installer installs {TESTED_FFMPEG} unless --use-system-ffmpeg)")
+
+
 def cmd_doctor(a) -> int:
     log.snapshot(LOG, a.ffmpeg, a.ffprobe)
     ok = True
@@ -471,6 +485,11 @@ def cmd_doctor(a) -> int:
         print(f"{b}: {path or 'NOT FOUND'}")
         ok &= path is not None
     print(f"ffmpeg version: {engine.ffmpeg_version(a.ffmpeg)}")
+    for b in (a.ffmpeg, a.ffprobe):   # informational only: never makes doctor fail
+        if shutil.which(b):
+            note = untested_ffmpeg_note(Path(b).name, engine.ffmpeg_version(b))
+            if note:
+                print(note)
     from .checks.slate import ocr   # optional: only the slate OCR checks need it (D27)
     try:
         print(f"tesseract (slate checks): {ocr.resolve_bin(ocr.tesseract_bin({}))}")
@@ -486,7 +505,7 @@ def cmd_doctor(a) -> int:
         print(f"plugin {mod}: IMPORT ERROR {err}")
         ok = False
     print(f"log: {log.log_path(getattr(a, 'log_file', None))}")
-    jf = Path.cwd() / JOB_FILE    # D31: informational, never a doctor problem
+    jf = Path.cwd() / JOB_FILE    # D31: an invalid job.yaml here is a doctor problem (a run would fail)
     if not jf.is_file():
         print(f"{JOB_FILE} in the current folder: none")
     else:
@@ -496,6 +515,7 @@ def cmd_doctor(a) -> int:
                                                                 " (no job.id)"))
         except ConfigError as e:
             print(f"{JOB_FILE} in the current folder: {jf} - INVALID: {e}")
+            ok = False
     print("OK" if ok else "PROBLEMS FOUND")
     return EXIT_PASS if ok else EXIT_ERROR
 

@@ -27,6 +27,6 @@ Run: `cd examples/spot_xr && cmr check SPOT.mov` (or from elsewhere `cmr check S
 --job-dir examples/spot_xr`; the old form `--profile spot_review --spec ... --job ...` still
 works; profiles spot_render / spot_review / spot_delivery). `job_label_colon.yaml` names only
 its spec and job id (`--job examples/spot_xr/job_label_colon.yaml --profile ...`).
-The :60 spec does not fit the `--short` demo: templates/quickstart/ is the unedited
+The :60 spec does not fit the `--short` demo: templates/starter/ is the unedited
 `--short` set (program 90 frames, CSV length 03, job id demo_sb_league).
 OCR needs tesseract (`CMR_TESSERACT`). Rules: ../../src/cmr/checks/slate/CLAUDE.md.

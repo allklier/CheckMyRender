@@ -4,7 +4,7 @@
 # Contents: install.sh, environment.yml, required_filters.txt (from the built package: the same
 # list `cmr doctor` checks), VERSION, README.txt, README.md, USERGUIDE.md (templates/README.md
 # links to ../USERGUIDE.md), wheels/<cmr wheel>, examples/ and templates/ without any CLAUDE.md,
-# SHA256SUMS. Details: installer/CLAUDE.md.
+# demo/ (make_spot.py + values_fictional.yaml from tests/slate: the demo spot generator), SHA256SUMS. Details: installer/CLAUDE.md.
 set -u -o pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -84,6 +84,9 @@ EOF
 
 cp "$HERE/install.sh" "$HERE/environment.yml" "$STAGE/" || die "cannot copy installer files"
 cp "$ROOT/README.md" "$ROOT/USERGUIDE.md" "$STAGE/" || die "cannot copy README.md / USERGUIDE.md"
+# demo spot generator: the test script is the single source; install.sh runs it once
+mkdir -p "$STAGE/demo" && cp "$ROOT/tests/slate/make_spot.py" "$ROOT/tests/slate/values_fictional.yaml" "$STAGE/demo/" \
+    || die "cannot copy the demo generator (tests/slate/make_spot.py)"
 chmod 755 "$STAGE/install.sh"
 printf '%s\n' "$VERSION" >"$STAGE/VERSION"
 for top in examples templates; do   # without CLAUDE.md (and no caches)
@@ -103,18 +106,21 @@ Install (per user, no sudo; Linux x86_64, tested on Rocky Linux 9):
 
 The installer creates its own conda environment (Python 3.12, from conda-forge only) in
 ~/.local/share/cmr/env, a 'cmr' launcher in ~/.local/bin and copies examples/ and templates/ to
-~/cmr-workspace. It uses an existing conda (Anaconda, Miniconda, Miniforge) without changing its
-base environment, or offers to install Miniforge. The system ffmpeg is used when it is new
-enough (>= 5.1 with all filters cmr needs), otherwise a conda-forge ffmpeg goes into cmr's
-environment; the system ffmpeg is never changed. Needs network access to conda.anaconda.org
-and about 3 GB free disk space (1.5 GB with --no-slate).
+~/cmr-workspace, where it also creates demo spots (a clean slated spot, ready to check in
+templates/starter/media, and spots with planted errors in demo_spots/; --no-demo skips them).
+It uses an existing conda (Anaconda, Miniconda, Miniforge) without changing its
+base environment, or offers to install Miniforge. It always installs the tested conda-forge
+ffmpeg 7.1.1 into cmr's own environment (so every machine gives comparable results); the system
+ffmpeg is never changed and only used with --use-system-ffmpeg. Needs network access to
+conda.anaconda.org and about 3.5 GB free disk space (2.5 GB with --no-slate).
 
 Production Python policy: never update or replace the system Python on a production machine
 (Flame and the OS rely on it); cmr runs from its own conda environment.
 
 Other options: $NAME/install.sh --help (--prefix, --workspace, --upgrade, --uninstall, --yes).
 Install log: ~/.cache/cmr/logs/install.log. After install: cmr doctor.
-Files: USERGUIDE.md (the user guide), README.md, wheels/ (the cmr package), environment.yml
+Files: USERGUIDE.md (the user guide), README.md, wheels/ (the cmr package), demo/ (the demo
+spot generator), environment.yml
 (conda packages), required_filters.txt, SHA256SUMS (checked by the installer before it
 changes anything).
 EOF

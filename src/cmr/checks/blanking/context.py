@@ -24,6 +24,11 @@ Python (no numpy):
    <= transition_max_jump into the first hit frame): a mask switched on during a dissolve
    or at a cut jumps (planted on real texture: 19-48 code values; real transitions 0-6).
 
+Animation guards (from user labels on a real master): a band whose run starts at a cut (an
+image cut in with its first move keyframe too loose), ends right before a cut (the mirror:
+last keyframe too loose) or whose depth moves fast (> 8 px per frame) is never excused as
+animation, however linear the move (evidence `animation_guard`).
+
 Classes (evidence `context`): animation | transition | steady | unknown. The profile maps
 them to a severity (`context_severity`); the analyser may only LOWER a finding
 (Finding.lower_to, raw_severity kept) and records `finding.verifier`. Detail and the
@@ -52,7 +57,7 @@ from cmr import log
 from cmr.model import Severity
 
 CLASSES = ("animation", "transition", "steady", "unknown")
-VERSION = 1
+VERSION = 2               # 2: animation guards cut_onset / fast_move (user labels)
 NAME = "blanking.context"
 OPPOSITE = {"left": "right", "right": "left", "top": "bottom", "bottom": "top"}
 SAMPLE_STRIDE = 61        # frame-difference sample: every 61st luma byte (~34k at 1080p)
@@ -73,6 +78,9 @@ DEFAULTS = {
     "context_min_motion_px": 3,      # animation: depth changes by >= this over the band run
     "context_monotone": 0.8,         # animation: share of depth steps in the main direction
     "context_min_r2": 0.8,           # animation: straight-line fit of the depth explains this
+    "context_cut_onset_frames": 2,   # not animation: band run starts <= this many frames after a cut
+    "context_cut_end_frames": 2,     # not animation: band run ends <= this many frames before a cut
+    "context_max_velocity_px": 8,   # not animation: median depth step above this (px per frame)
     "context_transition_gap": 2,     # hit within this many frames of a cut/dissolve
     "cut_max_hit_frames": 2,         # transition by a cut: only hits this short (cut frame)
     "transition_max_jump": 8,        # transition: outer-line luma jumps at most this at onset
@@ -110,6 +118,9 @@ def params_schema() -> dict:
         "context_min_motion_px": num, "context_monotone": {"type": "number", "minimum": 0,
                                                            "maximum": 1},
         "context_min_r2": {"type": "number", "minimum": 0, "maximum": 1},
+        "context_cut_onset_frames": {"type": "integer", "minimum": 0},
+        "context_cut_end_frames": {"type": "integer", "minimum": 0},
+        "context_max_velocity_px": num,
         "context_transition_gap": {"type": "integer", "minimum": 0},
         "cut_max_hit_frames": {"type": "integer", "minimum": 0},
         "transition_max_jump": num, "steady_max_range_px": num,
@@ -398,18 +409,47 @@ def classify(frames: dict[int, FrameFeat], edge: str, a: int, b: int, cuts: list
     if a - 1 in frames and band(a - 1) == 0:
         jump = abs(frames[a].edges[edge].outer - frames[a - 1].edges[edge].outer)
     ev["onset_jump"] = round(jump, 1)
+    # guards (user labels on a real long-form master): a band that STARTS AT A CUT (an image
+    # cut in with its first move keyframe too loose) or whose depth moves FAST is a framing
+    # error even when the move is linear: never excused as animation
+    s0, onset = tf["band_run"][0], None
+    for c in cuts:
+        if 0 <= s0 - c <= p["context_cut_onset_frames"] and c - 1 in track:
+            before, first = track[c - 1], track[s0]
+            if before == 0 or abs(before - first) > max(2.0, 0.5 * max(before, first)):
+                onset = s0 - c
+    ev["cut_onset"] = onset
+    # mirror: the band run ENDS <= context_cut_end_frames before a cut and is gone (or of a
+    # clearly different depth) on the cut frame
+    e0, end = tf["band_run"][1], None
+    for c in cuts:
+        if 0 <= c - e0 - 1 <= p["context_cut_end_frames"] and c in track:
+            after, last = track[c], track[e0]
+            if after == 0 or abs(after - last) > max(2.0, 0.5 * max(after, last)):
+                end = c - e0 - 1
+                break
+    ev["cut_end"] = end
+    guard = [g for g, hit_ in (("cut_onset", onset is not None), ("cut_end", end is not None),
+                               ("fast_move", tf["velocity_px"] > p["context_max_velocity_px"]))
+             if hit_]
+    if guard:
+        ev["animation_guard"] = guard
     if not ok:
         return {"context": "unknown", "reason": "hit not reproduced by the context decode", **ev}
     # 1. animation: the band continues outside the hit and moves steadily
-    if (tf["context_band_frames"] >= p["context_min_band_frames"]
-            and tf["depth_motion_px"] >= p["context_min_motion_px"]
-            and tf["moving_steps"] >= 2 and tf["monotone"] >= p["context_monotone"]
-            and tf["trend_r2"] >= p["context_min_r2"]):
+    moving = (tf["context_band_frames"] >= p["context_min_band_frames"]
+              and tf["depth_motion_px"] >= p["context_min_motion_px"]
+              and tf["moving_steps"] >= 2 and tf["monotone"] >= p["context_monotone"]
+              and tf["trend_r2"] >= p["context_min_r2"])
+    if moving and not guard:
         return {"context": "animation", **ev}
     # 2. transition: a short hit at a cut (field-mixed cut frame), or a hit mostly inside a
-    #    dissolve / fade
+    #    dissolve / fade. A moving band tied to a cut (guard cut_onset / cut_end) is not a
+    #    cut-frame artefact: the cut branch does not apply to it
+    cut_tied = moving and ("cut_onset" in guard or "cut_end" in guard)
     if (jump <= p["transition_max_jump"]
-            and ((cnear and min(cnear) <= g and b - a + 1 <= p["cut_max_hit_frames"])
+            and ((not cut_tied and cnear and min(cnear) <= g
+                  and b - a + 1 <= p["cut_max_hit_frames"])
                  or in_dis / len(hit) >= 0.5)):
         return {"context": "transition", **ev}
     # 3. steady: constant depth during the hit (the masking-error signature)
