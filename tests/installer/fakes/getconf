@@ -1,0 +1,4 @@
+#!/bin/bash
+# Fake getconf (macOS): DARWIN_USER_TEMP_DIR only.
+[ "${1:-}" = DARWIN_USER_TEMP_DIR ] && { echo /fake/var/folders/T/; exit 0; }
+exit 1

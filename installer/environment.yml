@@ -2,11 +2,16 @@
 #
 # install.sh does NOT use the `channels:` list below: it always runs conda with
 # `--override-channels -c conda-forge` (no Anaconda `defaults` channel, no Anaconda ToS/licence
-# question). The list is here so a human can also do `conda env create -p DIR -f environment.yml`.
+# question). The list is here so a human can also do `conda env create -p DIR -f environment.yml`
+# (all lines, or without the ffmpeg line to use the system ffmpeg).
 #
 # Tags (read by install.sh):
 #   # cmr:ffmpeg  only when the system ffmpeg/ffprobe fail the acceptance test (version >= 5.1
-#                 and every filter in required_filters.txt); never replaces the system ffmpeg
+#                 and every filter in required_filters.txt); never replaces the system ffmpeg.
+#                 Installed into the same env as everything else (<prefix>/env): conda-forge
+#                 ffmpeg 7.1 and tesseract 5.5.2 solve together (ffmpeg 6.1 did not: libxml2
+#                 conflict, so older installs had a separate <prefix>/ffmpeg-env; install.sh
+#                 migrates those).
 #   # cmr:slate   only without --no-slate (tesseract for the slate OCR checks, D27)
 # Untagged lines are always installed. PyYAML and jsonschema come from conda-forge so the cmr
 # wheel is installed with `pip --no-deps --no-index` (pip never contacts PyPI).
@@ -19,5 +24,8 @@ dependencies:
   - pip
   - pyyaml
   - jsonschema
-  - ffmpeg=6.1        # cmr:ffmpeg
-  - tesseract=5.5     # cmr:slate
+  - ffmpeg=7.1.1      # cmr:ffmpeg  (tested line: 7.1 LTS; conda-forge's default is the gpl build
+                      #   with x264/x265; an LGPL build is `ffmpeg=7.1.1=lgpl*`: not the default,
+                      #   has no libx264, untested with cmr)
+  - tesseract=5.5.2   # cmr:slate  (pinned, D32: same OCR on Linux and macOS)
+  - leptonica=1.87    # cmr:slate  (tesseract's image library, pinned with it)

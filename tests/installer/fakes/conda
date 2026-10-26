@@ -9,6 +9,13 @@ while [ $# -gt 0 ]; do
 done
 case $cmd in create|install) ;; *) echo "fake conda: unsupported $cmd" >&2; exit 2;; esac
 [ -n "$env" ] || exit 2
+# the real conda-forge conflict (first real run): ffmpeg 6.x needs libxml2 < 2.14, tesseract 5.5
+# (libarchive) needs libxml2-16 >= 2.14; also across calls into the same env. ffmpeg 7.1 and
+# tesseract solve together (measured 2026-10-26), so environment.yml pins 7.1.1: kept as a guard
+# against a regression to 6.x
+all=" ${specs[*]} $(cat "$env/.fake-specs" 2>/dev/null) "
+case $all in *" ffmpeg=6"*" tesseract"*|*" tesseract"*" ffmpeg=6"*)
+    echo "LibMambaUnsatisfiableError: tesseract requires libarchive ... libxml2 conflicts" >&2; exit 1;; esac
 mkdir -p "$env/bin" "$env/conda-meta"
 for s in "${specs[@]}"; do
     case $s in
@@ -17,5 +24,6 @@ for s in "${specs[@]}"; do
         tesseract*) cp "$FAKES/tesseract" "$env/bin/tesseract";;
     esac
 done
+printf '%s ' "${specs[@]}" >>"$env/.fake-specs"
 chmod +x "$env"/bin/*
 echo "done"

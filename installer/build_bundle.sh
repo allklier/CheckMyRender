@@ -99,7 +99,7 @@ Install (per user, no sudo; Linux x86_64, tested on Rocky Linux 9):
 
     tar xzf $NAME-bundle.tar.gz
     $NAME/install.sh --dry-run      # shows every step, changes nothing
-    $NAME/install.sh                # installs; add --no-slate to skip the slate OCR (~1.4 GB)
+    $NAME/install.sh                # installs; add --no-slate to skip the slate OCR (~0.9 GB)
 
 The installer creates its own conda environment (Python 3.12, from conda-forge only) in
 ~/.local/share/cmr/env, a 'cmr' launcher in ~/.local/bin and copies examples/ and templates/ to

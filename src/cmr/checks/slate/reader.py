@@ -109,7 +109,7 @@ def read(ctx, tpl: Template, params: dict) -> SlateRead:
     t0 = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="cmr_slate_") as tmp:
         for f in frames:
-            img = Path(tmp) / f"slate_{f}.png"
+            img = Path(tmp).resolve() / f"slate_{f}.png"   # macOS: /tmp -> /private/tmp (leptonica rewrites /tmp paths)
             ffmpeg([*seek_args(f, ctx.timeline.fps), "-i", str(path), "-map", f"0:{v['index']}",
                     "-frames:v", "1", "-pix_fmt", "gray", str(img)])
             words = ocr.run(str(img), binary, params.get("psm", 3), params.get("lang", "eng"),

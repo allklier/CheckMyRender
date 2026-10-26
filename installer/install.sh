@@ -7,12 +7,19 @@
 # never pip-installs into a Python other than <prefix>/env, never pipes a download into a
 # shell, and never changes conda's base or any other environment.
 set -u -o pipefail
+# Runs on bash 3.2 (macOS /bin/bash, D32) and on Linux bash 4/5: no associative arrays, no
+# mapfile, empty arrays expanded as ${a[@]+"${a[@]}"}, BSD/GNU-neutral tool options (sha256 via
+# sha256sum or `shasum -a 256`, no `date %N`, no `grep \s`, POSIX character classes).
 
 PROG=install.sh
 MIN_FFMPEG_MAJOR=5 MIN_FFMPEG_MINOR=1      # oldest ffmpeg cmr is tested with (5.1.10, Rocky 9)
 CHANNEL=conda-forge                        # every conda package comes from here only
-NEED_MB_SLATE=3072 NEED_MB_NOSLATE=1536 NEED_MB_UPDATE=512   # free space checks (estimates)
-MINIFORGE_URL=https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
+NEED_MB_SLATE=3072 NEED_MB_NOSLATE=2048 NEED_MB_UPDATE=512   # free space checks (estimates; measured 2026-10-26:
+# env ffmpeg 7.1 + tesseract 1.2 GB + ~0.56 GB package cache, --no-slate env with ffmpeg 765 MB + cache)
+# Miniforge is pinned: only the versioned release files have a `.sha256` next to them
+# (releases/latest/download/Miniforge3-<platform>.sh.sha256 is a 404; checked 2026-10-26)
+MINIFORGE_VERSION=26.9.4-0
+MINIFORGE_BASE=https://github.com/conda-forge/miniforge/releases/download/$MINIFORGE_VERSION
 POLICY="Production Python policy: the system Python was not touched and must never be updated
 or replaced on a production machine (Flame and the OS rely on it). CheckMyRender runs from its
 own conda environment."
@@ -23,6 +30,7 @@ BUNDLE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PREFIX="$HOME/.local/share/cmr"
 WORKSPACE="$HOME/cmr-workspace"
 BIN_DIR="$HOME/.local/bin"
+BIN_DIR_SET=0 WORKSPACE_SET=0
 DRY=0 YES=0 SLATE=1 UPGRADE=0 UNINSTALL=0 BOOTSTRAP=0 OFFLINE_DIR=""
 STEP=0 STEPS=9
 
@@ -37,6 +45,9 @@ a 'cmr' launcher in ~/.local/bin; examples/templates in a workspace folder.
 Options:
   --prefix DIR        install location (default ~/.local/share/cmr; env in DIR/env)
   --workspace DIR     where examples/ and templates/ are copied (default ~/cmr-workspace)
+  --bin-dir DIR       where the 'cmr' launcher goes (default ~/.local/bin)
+                      (a re-run, --upgrade or --uninstall of the same --prefix reuses the
+                      previous --workspace and --bin-dir unless they are given again)
   --no-slate          do not install tesseract (slate OCR checks then report ERROR)
   --upgrade           refresh the environment and reinstall cmr even if this version is installed
   --uninstall         remove the environment, launcher and prefix (asks first)
@@ -53,12 +64,16 @@ EOF
 # --- output and log (log line style of D29) ------------------------------------------------
 RUN_ID=$(od -An -N3 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
 LOG_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cmr/logs"
+# macOS: cmr logs to ~/Library/Logs/cmr (D32; an explicit XDG_CACHE_HOME still wins, as in cmr)
+[ "$(uname -s)" = Darwin ] && [ -z "${XDG_CACHE_HOME:-}" ] && LOG_DIR="$HOME/Library/Logs/cmr"
 LOG=/dev/null
+# milliseconds: GNU date only (BSD date prints "3N"); elsewhere .000
+case $(date +%3N 2>/dev/null) in [0-9][0-9][0-9]) DATE_FMT='+%Y-%m-%d %H:%M:%S.%3N';; *) DATE_FMT='+%Y-%m-%d %H:%M:%S.000';; esac
 
 log() {   # log LEVEL MESSAGE
     local lvl=$1; shift
     case $lvl in INFO|WARN) lvl="$lvl ";; esac
-    printf '%s %s install[%s/%s] run=%s file=- | %s\n' "$(date '+%Y-%m-%d %H:%M:%S.%3N')" \
+    printf '%s %s install[%s/%s] run=%s file=- | %s\n' "$(date "$DATE_FMT")" \
         "$lvl" "$$" "$$" "${RUN_ID:--}" "${*//$'\n'/ }" >>"$LOG"
 }
 say()  { printf '%s\n' "$*"; log INFO "$*"; }
@@ -107,8 +122,10 @@ while [ $# -gt 0 ]; do
     case $1 in
         --prefix) [ $# -ge 2 ] || die "--prefix needs a directory" "$PROG --help" 2; PREFIX=$2; shift;;
         --prefix=*) PREFIX=${1#*=};;
-        --workspace) [ $# -ge 2 ] || die "--workspace needs a directory" "$PROG --help" 2; WORKSPACE=$2; shift;;
-        --workspace=*) WORKSPACE=${1#*=};;
+        --workspace) [ $# -ge 2 ] || die "--workspace needs a directory" "$PROG --help" 2; WORKSPACE=$2; WORKSPACE_SET=1; shift;;
+        --workspace=*) WORKSPACE=${1#*=}; WORKSPACE_SET=1;;
+        --bin-dir) [ $# -ge 2 ] || die "--bin-dir needs a directory" "$PROG --help" 2; BIN_DIR=$2; BIN_DIR_SET=1; shift;;
+        --bin-dir=*) BIN_DIR=${1#*=}; BIN_DIR_SET=1;;
         --offline-dir) [ $# -ge 2 ] || die "--offline-dir needs a directory" "$PROG --help" 2; OFFLINE_DIR=$2; shift;;
         --offline-dir=*) OFFLINE_DIR=${1#*=};;
         --no-slate) SLATE=0;;
@@ -122,17 +139,24 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
-# platform first: plain sh syntax only up to here (macOS bash 3.2 must reach the polite stub)
+# platform: Linux x86_64 and macOS on Apple silicon (D32). Intel Macs and Rosetta are refused:
+# under Rosetta uname -m says x86_64 and sysctl.proc_translated is 1.
 OS=$(uname -s) ARCH=$(uname -m)
-case "$OS/$ARCH" in
-    Linux/x86_64) ;;
-    Darwin/arm64) die "macOS (Apple silicon) support is planned but not available yet; nothing was changed" \
-                      "use a Linux x86_64 machine (Rocky Linux 9 is the tested target)" 2;;
+translated=0
+[ "$OS" = Darwin ] && [ "$( (sysctl -n sysctl.proc_translated || /usr/sbin/sysctl -n sysctl.proc_translated) 2>/dev/null)" = 1 ] && translated=1
+case "$OS/$ARCH/$translated" in
+    Linux/x86_64/0) MINIFORGE_PLATFORM=Linux-x86_64;;
+    Darwin/arm64/0) MINIFORGE_PLATFORM=MacOSX-arm64;;
+    Darwin/*/1) die "this shell runs under Rosetta (x86_64 emulation); nothing was changed" \
+                    "open a native Terminal (not 'Open using Rosetta') and run the installer again: CheckMyRender supports Apple silicon natively only" 2;;
+    Darwin/*) die "unsupported platform $OS/$ARCH (Intel Mac); nothing was changed" \
+                  "CheckMyRender on macOS needs Apple silicon (arm64)" 2;;
     *) die "unsupported platform $OS/$ARCH; nothing was changed" \
-           "CheckMyRender installs on Linux x86_64 (Rocky Linux 9 tested); macOS is planned, Windows is out of scope" 2;;
+           "CheckMyRender installs on Linux x86_64 (Rocky Linux 9 tested) and macOS on Apple silicon; Windows is out of scope" 2;;
 esac
+MINIFORGE_URL="$MINIFORGE_BASE/Miniforge3-$MINIFORGE_VERSION-$MINIFORGE_PLATFORM.sh"
 abspath() { case $1 in /*) printf '%s' "${1%/}";; *) printf '%s/%s' "$PWD" "${1%/}";; esac; }
-PREFIX=$(abspath "$PREFIX"); WORKSPACE=$(abspath "$WORKSPACE")
+PREFIX=$(abspath "$PREFIX"); WORKSPACE=$(abspath "$WORKSPACE"); BIN_DIR=$(abspath "$BIN_DIR")
 [ -n "$PREFIX" ] && [ "$PREFIX" != "$HOME" ] && case "$HOME/" in "$PREFIX/"*) false;; *) true;; esac \
     || die "refusing --prefix $PREFIX (it must be a folder of its own, not / or your home)" \
            "use e.g. --prefix $HOME/.local/share/cmr" 2
@@ -144,8 +168,9 @@ if [ -n "$OFFLINE_DIR" ]; then   # hook for a later offline package cache (conda
 fi
 ENV="$PREFIX/env"
 FFBIN="$PREFIX/ffmpeg-bin"     # ffmpeg/ffprobe symlinks the launcher puts first on PATH
+OLD_FFENV="$PREFIX/ffmpeg-env" # older layout (conda-forge ffmpeg 6.1 could not share an env with tesseract
+                               # 5.5): migrated on the next run, ffmpeg goes into $ENV and this is removed
 STATE="$PREFIX/install-state"
-LAUNCHER="$BIN_DIR/cmr"
 
 if ((!DRY)); then
     if mkdir -p "$LOG_DIR" 2>/dev/null && touch "$LOG_DIR/install.log" 2>/dev/null; then
@@ -160,10 +185,13 @@ log INFO "=== $PROG start: $(qcmd "$0" "$@") bundle=$BUNDLE prefix=$PREFIX works
 ((DRY)) && say "DRY RUN: nothing will be changed; every action is printed."
 
 # --- state of a previous install -----------------------------------------------------------
-declare -A OLD=()
-if [ -f "$STATE" ]; then
-    while IFS='=' read -r k v; do [ -n "$k" ] && OLD[$k]=$v; done <"$STATE"
-fi
+old() {   # old KEY: value from the state file of the previous install (empty if none)
+    [ -f "$STATE" ] && awk -v k="$1" 'index($0, k "=") == 1 {v = substr($0, length(k) + 2)} END {printf "%s", v}' "$STATE"
+}
+# the launcher folder and workspace of the previous install win unless given again
+((BIN_DIR_SET)) || [ -z "$(old bin_dir)" ] || BIN_DIR=$(old bin_dir)
+((WORKSPACE_SET)) || [ -z "$(old workspace)" ] || WORKSPACE=$(old workspace)
+LAUNCHER="$BIN_DIR/cmr"
 
 # --- uninstall ------------------------------------------------------------------------------
 if ((UNINSTALL)); then
@@ -173,7 +201,7 @@ if ((UNINSTALL)); then
         "check --prefix" 1
     say "This removes: $PREFIX (conda environment, ffmpeg links, state$( [ -d "$PREFIX/conda" ] && printf ', bootstrapped Miniforge'))"
     grep -qF "$LAUNCHER_MARK" "$LAUNCHER" 2>/dev/null && say "and the launcher $LAUNCHER"
-    say "Kept: your workspace ($WORKSPACE or where you chose) and the logs ($LOG_DIR)."
+    say "Kept: your workspace ($WORKSPACE) and the logs ($LOG_DIR)."
     ask "Remove CheckMyRender?" || { say "Cancelled, nothing removed."; exit 3; }
     if grep -qF "$LAUNCHER_MARK" "$LAUNCHER" 2>/dev/null; then
         act "remove $LAUNCHER"; ((DRY)) || rm -f "$LAUNCHER"
@@ -188,11 +216,14 @@ say "$POLICY"
 
 # --- 1. preflight ---------------------------------------------------------------------------
 step "Check this machine"
-log INFO "os=$OS arch=$ARCH $( [ -r /etc/os-release ] && . /etc/os-release && printf '%s' "${PRETTY_NAME:-}")"
+log INFO "os=$OS arch=$ARCH $( [ -r /etc/os-release ] && . /etc/os-release && printf '%s' "${PRETTY_NAME:-}")$( [ "$OS" = Darwin ] && printf 'macOS %s' "$(sw_vers -productVersion 2>/dev/null)")"
 say "  OS: $OS $ARCH - supported"
-for t in sha256sum df mktemp grep sed awk cmp find sort tee; do
+for t in df mktemp grep sed awk cmp find sort tee; do
     command -v "$t" >/dev/null || die "required tool '$t' not found" "install coreutils/findutils/tar" 1
 done
+if command -v sha256sum >/dev/null; then SHA256=(sha256sum)          # GNU coreutils
+elif command -v shasum >/dev/null; then SHA256=(shasum -a 256)       # macOS (same output/-c format)
+else die "required tool 'sha256sum' (or 'shasum') not found" "install coreutils" 1; fi
 
 VERSION=$(cat "$BUNDLE/VERSION" 2>/dev/null) WHEEL=""
 for w in "$BUNDLE"/wheels/*.whl; do [ -f "$w" ] && WHEEL=$w; done
@@ -202,7 +233,7 @@ for w in "$BUNDLE"/wheels/*.whl; do [ -f "$w" ] && WHEEL=$w; done
            "unpack cmr-<version>-bundle.tar.gz and run cmr-<version>/install.sh (build one with installer/build_bundle.sh)" 1
 grep -q " wheels/$(basename "$WHEEL")\$" "$BUNDLE/SHA256SUMS" \
     || die "the wheel is not listed in SHA256SUMS" "download the bundle again" 1
-if ! (cd "$BUNDLE" && sha256sum -c --quiet SHA256SUMS) >>"$LOG" 2>&1; then
+if ! (cd "$BUNDLE" && "${SHA256[@]}" -c --quiet SHA256SUMS) >>"$LOG" 2>&1; then
     die "bundle checksum mismatch (SHA256SUMS): the download is damaged or was changed" "download the bundle again" 1
 fi
 say "  Bundle: cmr $VERSION, checksums ok ($(basename "$WHEEL"))"
@@ -216,14 +247,15 @@ if [ -e "$LAUNCHER" ] && ! grep -qF "$LAUNCHER_MARK" "$LAUNCHER" 2>/dev/null; th
         "rename or remove $LAUNCHER, then run the installer again" 1
 fi
 MODE=install
-if [ -n "${OLD[version]:-}" ] && [ -x "$ENV/bin/python" ]; then
-    if [ "${OLD[version]}" != "$VERSION" ]; then MODE=upgrade
+OLD_VERSION=$(old version)
+if [ -n "$OLD_VERSION" ] && [ -x "$ENV/bin/python" ]; then
+    if [ "$OLD_VERSION" != "$VERSION" ]; then MODE=upgrade
     elif ((UPGRADE)); then MODE=refresh
     else MODE=same; fi
 fi
 case $MODE in
     install) say "  New install into $PREFIX";;
-    upgrade) say "  Upgrade in place: cmr ${OLD[version]} -> $VERSION";;
+    upgrade) say "  Upgrade in place: cmr $OLD_VERSION -> $VERSION";;
     refresh) say "  cmr $VERSION is installed; --upgrade: refreshing the environment and reinstalling";;
     same)    say "  cmr $VERSION is already installed: re-checking links, workspace and health (--upgrade to refresh packages)";;
 esac
@@ -236,7 +268,7 @@ avail=$(df -Pk "$d" 2>/dev/null | awk 'NR==2 {print int($4/1024)}')
 log INFO "free space $avail MB on the file system of $d, need $need MB"
 if [ "$avail" -lt "$need" ]; then
     die "not enough free disk space: $avail MB free on the file system of $d, about $need MB needed" \
-        "free some space, choose another disk with --prefix DIR$( ((SLATE)) && printf ', or skip the slate OCR (~1.4 GB) with --no-slate')" 1
+        "free some space, choose another disk with --prefix DIR$( ((SLATE)) && printf ', or skip the slate OCR (~0.9 GB with the conda package cache) with --no-slate')" 1
 fi
 say "  Disk: $avail MB free, about $need MB needed"
 
@@ -245,7 +277,7 @@ step "Find conda (base and other environments are never changed)"
 conda_ok() { [ -n "$1" ] && [ -x "$1" ] && "$1" --version >/dev/null 2>&1; }
 CONDA="" CONDA_FROM=""
 try_conda() { [ -z "$CONDA" ] && conda_ok "$1" && { CONDA=$1; CONDA_FROM=$2; }; return 0; }
-try_conda "${OLD[conda]:-}" "previous install"
+try_conda "$(old conda)" "previous install"
 try_conda "$(command -v conda 2>/dev/null)" "PATH"
 for c in "$HOME/Tools/anaconda3" "$HOME/anaconda3" "$HOME/miniconda3" "$HOME/miniforge3"; do
     try_conda "$c/bin/conda" "$c"
@@ -268,7 +300,9 @@ fi
 
 # --- 3. ffmpeg ------------------------------------------------------------------------------
 step "Check the system ffmpeg/ffprobe (never changed)"
-mapfile -t REQ_FILTERS < <(grep -v '^\s*\(#\|$\)' "$BUNDLE/required_filters.txt")
+REQ_FILTERS=()
+while IFS= read -r f; do REQ_FILTERS[${#REQ_FILTERS[@]}]=$f
+done < <(grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$BUNDLE/required_filters.txt")
 find_system() {   # first $1 on PATH outside the cmr prefix
     local IFS=: d
     for d in $PATH; do
@@ -291,9 +325,10 @@ else
     if ! version_ok "$vff" || ! version_ok "$vfp"; then
         FF_WHY="$SYS_FF version '${vff:-unknown}' / ffprobe '${vfp:-unknown}' is older than $MIN_FFMPEG_MAJOR.$MIN_FFMPEG_MINOR or unreadable"
     else
-        have=$("$SYS_FF" -hide_banner -filters 2>/dev/null | sed -n 's/^ [T.][S.][C.] \([^ ][^ ]*\)  *[^ ][^ ]*->[^ ][^ ]*.*/\1/p')
+        # flag columns: T S C up to ffmpeg 7.1, T S from 8.0 (same rule as engine.available_filters)
+        have=$("$SYS_FF" -hide_banner -filters 2>/dev/null | sed -n 's/^ [T.][S.][C.]\{0,1\} \([^ ][^ ]*\)  *[^ ][^ ]*->[^ ][^ ]*.*/\1/p')
         miss=""
-        for f in "${REQ_FILTERS[@]}"; do grep -qx -- "$f" <<<"$have" || miss+="${miss:+, }$f"; done
+        for f in ${REQ_FILTERS[@]+"${REQ_FILTERS[@]}"}; do grep -qx -- "$f" <<<"$have" || miss+="${miss:+, }$f"; done
         if [ -n "$miss" ]; then FF_WHY="$SYS_FF $vff lacks filters: $miss"
         else FF_MODE=system FF_PATH=$SYS_FF FP_PATH=$SYS_FP; fi
     fi
@@ -303,7 +338,7 @@ if [ "$FF_MODE" = system ]; then
 else
     FF_PATH="$ENV/bin/ffmpeg" FP_PATH="$ENV/bin/ffprobe"
     say "  $FF_WHY"
-    say "  -> installing $CHANNEL ffmpeg into cmr's own environment (the system ffmpeg is not touched)"
+    say "  -> installing $CHANNEL ffmpeg into cmr's own environment $ENV (the system ffmpeg is not touched)"
 fi
 
 # --- 4. network -----------------------------------------------------------------------------
@@ -338,7 +373,7 @@ if ((NEED_BOOTSTRAP)); then
         && run curl -fsSL --retry 2 -o "$dl/miniforge.sh.sha256" "$MINIFORGE_URL.sha256" \
         || die "Miniforge download failed" "check the network/proxy, or install conda yourself and run again" 1
     if ((!DRY)); then
-        want=$(awk '{print $1; exit}' "$dl/miniforge.sh.sha256") got=$(sha256sum "$dl/miniforge.sh" | awk '{print $1}')
+        want=$(awk '{print $1; exit}' "$dl/miniforge.sh.sha256") got=$("${SHA256[@]}" "$dl/miniforge.sh" | awk '{print $1}')
         log INFO "miniforge sha256 want=$want got=$got"
         [ -n "$want" ] && [ "$want" = "$got" ] || die "Miniforge checksum mismatch; not run" "run again (download damaged?)" 1
     else
@@ -358,23 +393,24 @@ while IFS= read -r line; do
     esac
     SPECS+=("$spec")
 done < <(sed -n '/^dependencies:/,$p' "$BUNDLE/environment.yml")
-say "  Packages ($CHANNEL only): ${SPECS[*]}"
+say "  Packages ($CHANNEL only): ${SPECS[*]-}"
 ((SLATE)) || say "  Slate OCR skipped (--no-slate): no tesseract; slate checks will report ERROR"
 channel_args() { printf '%s\n' --override-channels -c "$CHANNEL"; }   # offline hook: --offline -c file://DIR
-mapfile -t CH < <(channel_args)
+CH=()
+while IFS= read -r a; do CH[${#CH[@]}]=$a; done < <(channel_args)
 if [ ! -x "$ENV/bin/python" ]; then
     [ -e "$ENV" ] && { act "remove the incomplete environment $ENV"; ((DRY)) || rm -rf "$ENV"; }
-    run_live "$CONDA" create -y -q -p "$ENV" "${CH[@]}" --no-default-packages "${SPECS[@]}" \
+    run_live "$CONDA" create -y -q -p "$ENV" "${CH[@]}" --no-default-packages ${SPECS[@]+"${SPECS[@]}"} \
         || die "conda could not create the environment" \
                "see the log; network/proxy problems: set HTTPS_PROXY or proxy_servers in ~/.condarc; then run again" 1
 else
-    missing=0   # a package newly needed (ffmpeg now failing the test, slate turned back on)
-    [ "$FF_MODE" = env ] && [ ! -x "$ENV/bin/ffmpeg" ] && missing=1
+    missing=0   # a package newly needed (slate turned back on, system ffmpeg turned bad, old ffmpeg-env)
     ((SLATE)) && [ ! -x "$ENV/bin/tesseract" ] && missing=1
+    [ "$FF_MODE" = env ] && { [ ! -x "$ENV/bin/ffmpeg" ] || [ ! -x "$ENV/bin/ffprobe" ]; } && missing=1
     if [ "$MODE" = same ] && ((!missing)); then
         say "  Environment is up to date (nothing to add)"
     else
-        run_live "$CONDA" install -y -q -p "$ENV" "${CH[@]}" "${SPECS[@]}" \
+        run_live "$CONDA" install -y -q -p "$ENV" "${CH[@]}" ${SPECS[@]+"${SPECS[@]}"} \
             || die "conda could not update the environment" "see the log; then run again (or --uninstall and install fresh)" 1
     fi
 fi
@@ -403,6 +439,11 @@ launcher_text() {
     if ((SLATE)); then
         printf 'CMR_TESSERACT="$CMR_PREFIX/env/bin/tesseract"; export CMR_TESSERACT\n'
     fi
+    if [ "$OS" = Darwin ]; then   # found on the Mac run 2026-10-26 (cron-like env -i)
+        printf '# macOS: leptonica (tesseract) cannot open files under /tmp (it rewrites /tmp to the per-user\n'
+        printf '# temp dir), so a run without TMPDIR (cron, launchd, env -i) gets the per-user temp dir\n'
+        printf '[ -n "${TMPDIR:-}" ] || { t=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) && [ -n "$t" ] && TMPDIR=$t && export TMPDIR; }\n'
+    fi
     printf '# keep the environment Python clean of other Pythons'"'"' settings\n'
     printf 'unset PYTHONPATH PYTHONHOME; PYTHONNOUSERSITE=1; export PYTHONNOUSERSITE\n'
     printf 'exec "$CMR_PREFIX/env/bin/cmr" "$@"\n'
@@ -417,31 +458,63 @@ else
     launcher_text >"$LAUNCHER.tmp.$$" && chmod 755 "$LAUNCHER.tmp.$$" && mv -f "$LAUNCHER.tmp.$$" "$LAUNCHER" \
         || die "cannot write $LAUNCHER" "check permissions of $BIN_DIR" 1
 fi
+if [ -d "$OLD_FFENV" ]; then   # migration: the links no longer point into the old separate ffmpeg env
+    act "remove the old separate ffmpeg environment $OLD_FFENV (ffmpeg now: $FF_PATH)"
+    if ((!DRY)); then
+        rm -rf "$OLD_FFENV" || die "cannot remove $OLD_FFENV" "check permissions" 1
+        say "  Migrated: removed the old separate ffmpeg environment $OLD_FFENV (ffmpeg now: $FF_PATH)"
+    fi
+fi
 
 # --- 8. workspace ---------------------------------------------------------------------------
 step "Copy examples and templates to $WORKSPACE"
-new=0 same=0 kept=()
+# <workspace>/.cmr-installed-files: "sha256  path" of every file the installer last put there
+# (kept across --uninstall); a file still matching it was not edited and is updated when the
+# bundle changes
+WSLIST="$WORKSPACE/.cmr-installed-files"
+[ -f "$WSLIST" ] && oldlist=$WSLIST || oldlist=/dev/null
+newlist=""
+if ((!DRY)); then
+    mkdir -p "$WORKSPACE" && newlist=$(mktemp "$WORKSPACE/.cmr-installed-files.XXXXXX") \
+        || die "cannot write to $WORKSPACE" "check permissions, or choose --workspace DIR" 1
+fi
+new=0 same=0 upd=0 kept=()
 for top in examples templates; do
     [ -d "$BUNDLE/$top" ] || continue
     while IFS= read -r -d '' f; do
-        rel=${f#"$BUNDLE/"} dst="$WORKSPACE/$rel"
-        if [ ! -e "$dst" ]; then
-            new=$((new + 1))
-            if ((DRY)); then :; else mkdir -p "$(dirname "$dst")" && cp -p "$f" "$dst" || die "cannot copy to $dst" "check permissions and free space"; fi
+        rel=${f#"$BUNDLE/"} dst="$WORKSPACE/$rel" put=""
+        if [ ! -e "$dst" ]; then new=$((new + 1)) put=1
         elif cmp -s "$f" "$dst"; then same=$((same + 1))
+        elif [ "$("${SHA256[@]}" <"$dst" | cut -c1-64)" = "$(awk -v r="$rel" 'substr($0, 67) == r {print substr($0, 1, 64)}' "$oldlist")" ]; then
+            upd=$((upd + 1)) put=1; log INFO "updated unedited file $rel"
         else kept+=("$rel"); fi
+        if [ -n "$put" ] && ((!DRY)); then
+            mkdir -p "$(dirname "$dst")" && cp -p "$f" "$dst" || die "cannot copy to $dst" "check permissions and free space"
+        fi
+        if ((!DRY)); then   # what the workspace now holds from the installer (kept: the old entry)
+            if [ -n "$put" ] || cmp -s "$f" "$dst"; then printf '%s  %s\n' "$("${SHA256[@]}" <"$f" | cut -c1-64)" "$rel"
+            else awk -v r="$rel" 'substr($0, 67) == r' "$oldlist"; fi >>"$newlist"
+        fi
     done < <(find "$BUNDLE/$top" -type f ! -name CLAUDE.md -print0 | sort -z)
 done
-act "copy $new new files (no CLAUDE.md) into $WORKSPACE"
-say "  $new new, $same unchanged, ${#kept[@]} kept as you edited them (never overwritten)"
-for k in "${kept[@]}"; do log INFO "kept edited file $k"; done
+((DRY)) || mv -f "$newlist" "$WSLIST"
+act "copy $new new and $upd updated files (no CLAUDE.md) into $WORKSPACE"
+say "  $new new, $upd updated (not edited by you), $same unchanged, ${#kept[@]} kept as you edited them (never overwritten)"
+for k in ${kept[@]+"${kept[@]}"}; do log INFO "kept edited file $k"; done
 ((${#kept[@]})) && say "  Fresh copies of the kept files are in $BUNDLE"
+# the guide and README are reference text, not starting points: refreshed on every run (and
+# templates/README.md links to ../USERGUIDE.md)
+for doc in README.md USERGUIDE.md; do
+    [ -f "$BUNDLE/$doc" ] || continue
+    act "copy $doc to $WORKSPACE (replaced on every run)"
+    ((DRY)) || { mkdir -p "$WORKSPACE" && cp -p "$BUNDLE/$doc" "$WORKSPACE/$doc"; } || die "cannot copy $doc to $WORKSPACE" "check permissions and free space"
+done
 
 # --- state ----------------------------------------------------------------------------------
 act "write $STATE"
 if ((!DRY)); then
-    printf 'version=%s\nffmpeg_mode=%s\nffmpeg=%s\nslate=%s\nworkspace=%s\nconda=%s\ninstalled=%s\n' \
-        "$VERSION" "$FF_MODE" "$FF_PATH" "$SLATE" "$WORKSPACE" "$CONDA" "$(date '+%Y-%m-%d %H:%M:%S')" >"$STATE"
+    printf 'version=%s\nffmpeg_mode=%s\nffmpeg=%s\nslate=%s\nworkspace=%s\nbin_dir=%s\nconda=%s\ninstalled=%s\n' \
+        "$VERSION" "$FF_MODE" "$FF_PATH" "$SLATE" "$WORKSPACE" "$BIN_DIR" "$CONDA" "$(date '+%Y-%m-%d %H:%M:%S')" >"$STATE"
 fi
 
 # --- 9. verify ------------------------------------------------------------------------------
@@ -488,14 +561,15 @@ printf '\n'
 ((DRY)) || say "CheckMyRender $VERSION is installed."
 say "  Environment : $ENV (Python 3.12 from $CHANNEL; conda: $CONDA)"
 say "  Launcher    : $LAUNCHER"
-say "  ffmpeg      : $FF_PATH ($( [ "$FF_MODE" = system ] && printf 'system, not changed' || printf 'conda-forge, inside the cmr environment'))"
+say "  ffmpeg      : $FF_PATH ($( [ "$FF_MODE" = system ] && printf 'system, not changed' || printf 'conda-forge, in cmr'"'"'s environment'))"
 ((SLATE)) && say "  tesseract   : $ENV/bin/tesseract (slate OCR; launcher sets CMR_TESSERACT)" \
           || say "  tesseract   : not installed (--no-slate)"
-say "  Workspace   : $WORKSPACE (examples/, templates/)"
+say "  Workspace   : $WORKSPACE (examples/, templates/, USERGUIDE.md)"
 say "  Install log : $( ((DRY)) && printf '(none in dry-run)' || printf '%s' "$LOG")"
 case ":$PATH:" in
     *":$BIN_DIR:"*) say "Run: cmr doctor   |   cmr check RENDER.mov --profile review --spec SPEC.yaml";;
-    *) say "NOTE: $BIN_DIR is not on your PATH. Add it (e.g. in ~/.bashrc):"
+    *) rc_file="~/.bashrc"; [ "$OS" = Darwin ] && rc_file="~/.zprofile"
+       say "NOTE: $BIN_DIR is not on your PATH. Add it (e.g. in $rc_file):"
        say "        export PATH=\"$BIN_DIR:\$PATH\""
        say "      or call cmr by its full path: $LAUNCHER doctor";;
 esac

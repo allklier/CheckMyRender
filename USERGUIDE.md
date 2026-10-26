@@ -2021,7 +2021,7 @@ All examples with these files use the spec of quick start A (`specs/spec_shownam
 
 Requirements: section 1. The installer works per user (no sudo, never as root), needs network
 access to conda.anaconda.org (conda-forge packages only; no PyPI, no Anaconda `defaults`) and
-about 3 GB free disk space (1.5 GB with `--no-slate`). It never touches the system Python or the
+about 3 GB free disk space (2 GB with `--no-slate`). It never touches the system Python or the
 system ffmpeg, and never changes conda's base or other environments.
 
     tar xzf cmr-<version>-bundle.tar.gz
@@ -2033,10 +2033,12 @@ What it does:
   ~/miniforge3), or offers to install Miniforge privately (`--bootstrap-conda`; not yet verified on a
   machine without conda);
 - creates its own environment ~/.local/share/cmr/env (Python 3.12, PyYAML, jsonschema, the cmr
-  package, tesseract 5.5.2 for the slate checks; `--no-slate` skips tesseract, about 0.9 GB less);
+  package, tesseract 5.5.2 for the slate checks; `--no-slate` skips tesseract, about 0.4 GB less on disk plus about 0.5 GB of package cache);
 - uses the system ffmpeg/ffprobe when they are 5.1 or newer and have every filter cmr needs
-  (Rocky 9: 5.1.10, accepted); otherwise it installs conda-forge ffmpeg 6.1 into a separate
-  environment ~/.local/share/cmr/ffmpeg-env;
+  (Rocky 9: 5.1.10, accepted); otherwise it adds conda-forge ffmpeg 7.1.1 to the same
+  environment ~/.local/share/cmr/env (about 0.6 GB more; always the case on a Mac, which has no
+  system ffmpeg). An older install with a separate ~/.local/share/cmr/ffmpeg-env is migrated
+  automatically on the next run;
 - writes the launcher ~/.local/bin/cmr (`--bin-dir DIR` for another folder) and copies examples/,
   templates/ and this guide to ~/cmr-workspace (`--workspace DIR`); files you edited there are never
   overwritten, unedited ones are updated on upgrade;
@@ -2044,7 +2046,7 @@ What it does:
 
 If ~/.local/bin is not on your PATH the installer says so; add
 `export PATH="$HOME/.local/bin:$PATH"` to ~/.bashrc, or call ~/.local/bin/cmr by its full path.
-No `conda activate` is needed, also not in scripts or cron (verified with `env -i`).
+No `conda activate` is needed, also not in scripts or cron (verified with `env -i`). On macOS the launcher also sets TMPDIR to your per-user temp folder when it is unset (cron, launchd), because tesseract there cannot read files under /tmp; do not set `TMPDIR=/tmp` yourself.
 
 Other options: `--prefix DIR` (install location), `--upgrade` (refresh packages and reinstall cmr),
 `--uninstall` (asks; removes the environment and launcher, keeps your workspace and logs), `-y`.

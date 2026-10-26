@@ -1,0 +1,4 @@
+#!/bin/bash
+# Fake sw_vers (macOS).
+[ "$1" = -productVersion ] && { echo 26.7.1; exit 0; }
+printf 'ProductName:\tmacOS\nProductVersion:\t26.7.1\n'

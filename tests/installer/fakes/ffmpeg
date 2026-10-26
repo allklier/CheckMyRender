@@ -1,8 +1,8 @@
 #!/bin/bash
 # Fake ffmpeg/ffprobe. FAKE_FF_VERSION / FAKE_FP_VERSION, FAKE_FF_MISSING (filters to drop).
-# A copy inside a conda env (path contains /env/bin/) reports 6.1.2 with all filters.
+# A copy inside a conda env (path contains /env/bin/) reports 7.1.1 with all filters.
 name=$(basename "$0")
-case $0 in */env/bin/*) v=6.1.2; miss="";; *)
+case $0 in */env/bin/*) v=7.1.1; miss="";; *)
     v=${FAKE_FF_VERSION:-6.1.1}; [ "$name" = ffprobe ] && v=${FAKE_FP_VERSION:-$v}; miss=" ${FAKE_FF_MISSING:-} ";; esac
 echo "$name $*" >>"$FAKE_CALLS"
 for a in "$@"; do

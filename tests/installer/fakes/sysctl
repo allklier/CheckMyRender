@@ -1,0 +1,4 @@
+#!/bin/bash
+# Fake sysctl (macOS): `-n sysctl.proc_translated` prints $FAKE_TRANSLATED (default 0 = native).
+[ "$1" = -n ] && [ "$2" = sysctl.proc_translated ] && { echo "${FAKE_TRANSLATED:-0}"; exit 0; }
+echo "sysctl: unknown oid '$2'" >&2; exit 1
