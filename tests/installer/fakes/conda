@@ -21,7 +21,7 @@ for s in "${specs[@]}"; do
     case $s in
         python*) cp "$FAKES/python" "$env/bin/python";;
         ffmpeg*) cp "$FAKES/ffmpeg" "$env/bin/ffmpeg"; cp "$FAKES/ffmpeg" "$env/bin/ffprobe";;
-        tesseract*) cp "$FAKES/tesseract" "$env/bin/tesseract";;
+        tesseract*) cp "$FAKES/tesseract" "$env/bin/tesseract"; mkdir -p "$env/share/tessdata";;
     esac
     echo '{}' >"$env/conda-meta/${s%%=*}-0.0-fake.json"     # like conda's package records
 done

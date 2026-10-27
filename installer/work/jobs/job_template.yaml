@@ -1,0 +1,7 @@
+# Copy this file to jobs/<project>.yaml and edit. Paths are relative to this file.
+job_version: 1
+spec: ../specs/spec_review_render.yaml
+profile: ../profiles/client_review.yaml
+output: ../reports
+job:
+  id: my_project            # EDIT: letters, digits, _ - .

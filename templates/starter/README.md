@@ -26,14 +26,14 @@ The rules (which checks run, how strict) come from a stock profile named in the 
     tar xzf cmr-<version>-bundle.tar.gz
     cmr-<version>/install.sh
 
-The installer puts a copy of this folder in `~/cmr-workspace/templates/starter`, with a clean
-demo spot in its `media/`, and spots with planted errors in `~/cmr-workspace/demo_spots/errors/`
+The installer puts a copy of this folder in `~/cmr/demo/templates/starter`, with a clean
+demo spot in its `media/`, and spots with planted errors in `~/cmr/demo/demo_spots/errors/`
 (about 60 MB per spot; `install.sh --no-demo` skips them). Check the install with `cmr doctor`.
 
 **2. Copy the starter folder** (one folder per job; the copy carries the demo spot):
 
     mkdir -p ~/qc
-    cp -r ~/cmr-workspace/templates/starter ~/qc/my_first_job
+    cp -r ~/cmr/demo/templates/starter ~/qc/my_first_job
     cd ~/qc/my_first_job
 
 **3. Check the demo spot:**
@@ -56,13 +56,13 @@ cmr reads the file once, prints the result and writes a report to `reports/`. It
 **4. Swap in a spot with an error** (the same spot, but its slate has a typo in the client name):
 
     rm media/*.mov
-    cp ~/cmr-workspace/demo_spots/errors/client_typo/*.mov media/
+    cp ~/cmr/demo/demo_spots/errors/client_typo/*.mov media/
     cmr check media/*.mov
 
       FAIL    slate.content: slate CLIENT 'Sample Bugrers', expected 'Sample Burgers' @ 00:59:53:01-00:59:57:28 (frames 1-148)
     RESULT FAIL (exit 2): PASS 26, SKIPPED 1, FAIL 1
 
-`~/cmr-workspace/demo_spots/errors/many_errors/` holds a spot with many planted errors (each
+`~/cmr/demo/demo_spots/errors/many_errors/` holds a spot with many planted errors (each
 listed in the `manifest.yaml` next to it): try it the same way.
 
 **5. Put your own video in `media/`:**
@@ -139,7 +139,7 @@ slate template. A CSV file has no comments: its first line is the column header.
 
 The installer made them once with the generator in the bundle (`demo/make_spot.py`); one you
 delete is not made again. To make them by hand, from a CheckMyRender source folder (a Python
-with numpy and Pillow, e.g. the one in cmr's environment, `~/.local/share/cmr/env/bin/python`):
+with numpy and Pillow, e.g. the one in cmr's environment, `~/cmr/bin/env/bin/python`):
 
     python3 ~/CheckMyRender/tests/slate/make_spot.py ~/qc/spots --short
     cp ~/qc/spots/clean/*.mov media/
@@ -151,7 +151,7 @@ generator's help lists all planted defects.
 
 - `../README.md` (the templates folder): which spec and profile to copy for other
   deliverables (long form, review renders, colour interims, overnight batches).
-- The user guide `USERGUIDE.md` (in `~/cmr-workspace` or the CheckMyRender folder): every field, every check, waivers, the slate checks,
+- The user guide `USERGUIDE.md` (in `~/cmr/demo` or the CheckMyRender folder): every field, every check, waivers, the slate checks,
   profiles, overnight runs.
 - `cmr profiles show spot_delivery --spec spec_starter.yaml --job job.yaml`: the rules this job runs with.
 - `cmr check --help`: options such as `--quality fast` (quicker), `--mode background`

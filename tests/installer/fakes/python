@@ -2,6 +2,8 @@
 # Fake env python: only `-m pip install ... WHEEL`, `-m pip check` and the demo generator
 # (`python .../make_spot.py OUTDIR --short [--defect client_typo]`: writes small stand-in spots
 # like the real one; FAKE_DEMO_FAIL=1 fails like a missing font).
+# the launcher runs `python -I -m cmr ARGS` (D33): hand over to the fake console script
+if [ "${1:-} ${2:-} ${3:-}" = "-I -m cmr" ]; then shift 3; exec "$(dirname "$0")/cmr" "$@"; fi
 echo "python $* PYTHONPATH=${PYTHONPATH:-unset} PIP_CONFIG_FILE=${PIP_CONFIG_FILE:-unset}" >>"$FAKE_CALLS"
 if [ "$(basename "${1:-}")" = make_spot.py ]; then
     echo "make_spot ffmpeg=$(command -v ffmpeg)" >>"$FAKE_CALLS"

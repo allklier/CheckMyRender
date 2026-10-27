@@ -4,22 +4,22 @@ Starting points for your own QC setup. **Copy, then edit the copy**; do not edit
 here or in `profiles/` (an update of CheckMyRender would overwrite them). Every file is
 commented line by line. The full explanation of every field is in the user guide, `USERGUIDE.md`
 ([link](../USERGUIDE.md) in a CheckMyRender folder; the installer also copies it to
-`~/cmr-workspace/USERGUIDE.md`). The
+`~/cmr/demo/USERGUIDE.md`). The
 guide's quick starts (A: any render, B: slated spot, C: waivers) use these files.
 
 **New here? Start with `starter/`**: one folder with everything for one broadcast deliverable
 (copy it and run `cmr check media/*.mov`: after the installer its `media/` already holds a clean
-demo spot; then try the spots in `~/cmr-workspace/demo_spots/errors/` and your own video; steps in
+demo spot; then try the spots in `~/cmr/demo/demo_spots/errors/` and your own video; steps in
 `starter/README.md`).
 
-Where this folder is: `templates/` in the CheckMyRender folder, or `~/cmr-workspace/templates`
+Where this folder is: `templates/` in the CheckMyRender folder, or `~/cmr/demo/templates`
 after the installer. Commands below are written for either; the guide calls it `TEMPLATES`.
 
 ## What to copy for which situation
 
 | Situation | Spec sheet (job facts) | Profile (rules) | Extra |
 |---|---|---|---|
-| First try: one folder with everything for an HD ad spot. Works unedited with the demo spot, which the installer already put into its `media/` (spots with planted errors: `~/cmr-workspace/demo_spots/errors/`; in a source checkout make them with `tests/slate/make_spot.py spots --short`); with your own render, edit the spec until a known-good render passes | `starter/spec_starter.yaml` | stock `spot_delivery` (`starter/job.yaml`), `release` (`starter/job_no_slate.yaml`) | the whole `starter/` folder: copy it, put the video into `media/`, run `cmr check media/*.mov` in it. Steps: `starter/README.md` |
+| First try: one folder with everything for an HD ad spot. Works unedited with the demo spot, which the installer already put into its `media/` (spots with planted errors: `~/cmr/demo/demo_spots/errors/`; in a source checkout make them with `tests/slate/make_spot.py spots --short`); with your own render, edit the spec until a known-good render passes | `starter/spec_starter.yaml` | stock `spot_delivery` (`starter/job.yaml`), `release` (`starter/job_no_slate.yaml`) | the whole `starter/` folder: copy it, put the video into `media/`, run `cmr check media/*.mov` in it. Steps: `starter/README.md` |
 | Check a render right after it comes out of Flame (settings only, fast) | any spec below | `profiles/client_render_check.yaml` | |
 | Client / internal review render | `specs/spec_review_render.yaml` | `profiles/client_review.yaml` (or stock `review`) | |
 | Final master or deliverable, file-based | `specs/spec_master_generic.yaml` | `profiles/client_delivery.yaml` (or stock `release`) | `waivers/waivers_example.yaml` |

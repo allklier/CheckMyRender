@@ -4,7 +4,7 @@ Video QC suite for Rocky Linux and macOS on Apple Silicon. Command-line QC for r
 Flame and other finishing apps: an idiot-check that speeds up delivery without missing errors. It checks
 the settings of a file against a delivery spec, and inspects picture, sound and the slate of ad spots.
 
-> **Status: 0.1.0, the first verified release.** Tested on generated media and on real renders (Rocky Linux 9 and
+> **Status: 0.1.1 (installer release on top of the verified 0.1.0).** Tested on generated media and on real renders (Rocky Linux 9 and
 > Apple Silicon macOS, ffmpeg 7.1.1). Use it as a second pair of eyes, not as the final authority: the blanking
 > check in particular is noisy on long-form material until the planned ML verifier. Known limits and the next
 > steps are in [TODO.md](TODO.md).
@@ -49,14 +49,16 @@ that results may differ).
 You get a bundle `cmr-<version>-bundle.tar.gz`:
 
 ```
-tar xzf cmr-0.1.0-bundle.tar.gz
-cmr-0.1.0/install.sh --dry-run        # shows every step, changes nothing
-cmr-0.1.0/install.sh
+tar xzf cmr-0.1.1-bundle.tar.gz
+cmr-0.1.1/install.sh --dry-run        # shows every step, changes nothing
+cmr-0.1.1/install.sh
 cmr doctor
 ```
 
 (The installer has been run for real on Rocky Linux and on Apple Silicon macOS: USERGUIDE.md section 20.) It also
-copies `examples/` and `templates/` to `~/cmr-workspace` and makes demo spots there (`--no-demo` skips them).
+puts everything into one folder, `~/cmr` (`--root DIR` for another): `bin/` (cmr and its own environment;
+`~/.local/bin/cmr` links to it), `demo/` (examples, templates, demo spots; `--no-demo` skips the spots) and
+`work/` (your own specs, profiles, jobs and reports). The folder can be moved later (USERGUIDE.md section 20).
 Never change the system Python on a Flame machine.
 
 ### First check: the starter folder
@@ -65,16 +67,16 @@ already holds a clean demo spot. Copy it, check the demo (PASS in seconds), swap
 errors, then use your own video:
 
 ```
-mkdir -p ~/qc && cp -r ~/cmr-workspace/templates/starter ~/qc/my_first_job && cd ~/qc/my_first_job
+mkdir -p ~/qc && cp -r ~/cmr/demo/templates/starter ~/qc/my_first_job && cd ~/qc/my_first_job
 cmr check media/*.mov                         # PASS (exit 0); reads the slate (tesseract)
 cmr check media/*.mov --job job_no_slate.yaml # PASS without slate reading
-rm media/*.mov && cp ~/cmr-workspace/demo_spots/errors/client_typo/*.mov media/
+rm media/*.mov && cp ~/cmr/demo/demo_spots/errors/client_typo/*.mov media/
 cmr check media/*.mov                         # FAIL slate.content: slate CLIENT 'Sample Bugrers' (exit 2)
 rm media/*.mov && cp /path/to/your_render.mov media/
 cmr check media/*.mov --job job_no_slate.yaml # your render (no slate reading yet)
 ```
 
-`~/cmr-workspace/demo_spots/errors/many_errors/` has a spot with many planted errors. Steps and how to
+`~/cmr/demo/demo_spots/errors/many_errors/` has a spot with many planted errors. Steps and how to
 read the result: [templates/starter/README.md](templates/starter/README.md), USERGUIDE.md quick start A.
 
 From a source checkout instead (Python 3.12+ in a conda environment, ffmpeg and ffprobe on the PATH):

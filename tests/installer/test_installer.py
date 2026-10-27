@@ -60,6 +60,10 @@ def make_bundle(dst: Path, version: str = "0.0.1") -> Path:
     (dst / "templates" / "starter" / "media" / "README.txt").write_text("put your video here\n")
     (dst / "demo").mkdir()
     (dst / "demo" / "make_spot.py").write_text("# stand-in: the fake env python plays the generator\n")
+    for rel in ("README.md", "jobs/job_template.yaml", "specs/spec_review_render.yaml",
+                "profiles/client_review.yaml"):       # work area seeds (build_bundle.sh)
+        (dst / "work" / rel).parent.mkdir(parents=True, exist_ok=True)
+        (dst / "work" / rel).write_text(f"seed {rel}\n")
     write_sums(dst)
     return dst
 
@@ -91,10 +95,13 @@ class Rig:
         self.calls = tmp / "calls.log"
         self.calls.touch()
         self.bundle = bundle or make_bundle(tmp / "bundle")
-        self.prefix = self.home / ".local/share/cmr"
+        self.root = self.home / "cmr"                 # D33 default: ~/cmr/{bin,demo,work}
+        self.prefix = self.root / "bin"
         self.env_dir = self.prefix / "env"
-        self.launcher = self.home / ".local/bin/cmr"
-        self.workspace = self.home / "cmr-workspace"
+        self.launcher = self.prefix / "cmr"           # the real launcher lives in the prefix
+        self.link = self.home / ".local/bin/cmr"      # PATH link to it
+        self.workspace = self.root / "demo"
+        self.work = self.root / "work"
         self.log = self.home / ".cache/cmr/logs/install.log"
 
     def path(self, conda=True, ffmpeg=True, extra=()):
@@ -126,6 +133,11 @@ def out(p) -> str:
     return p.stdout + p.stderr
 
 
+def link_target(p: Path) -> str:
+    """Where a symlink points, made absolute (the ffmpeg-bin links into env/bin are relative)."""
+    return os.path.normpath(os.path.join(p.parent, os.readlink(p)))
+
+
 # --- static ---------------------------------------------------------------------------------
 def test_syntax():
     for f in ("install.sh", "build_bundle.sh"):
@@ -145,7 +157,7 @@ def test_shellcheck_if_available():
 def test_help(rig):
     p = rig.run("--help")
     assert p.returncode == 0
-    for flag in ("--prefix", "--workspace", "--bin-dir", "--no-slate", "--upgrade", "--uninstall",
+    for flag in ("--root", "--no-work", "--prefix", "--workspace", "--bin-dir", "--no-slate", "--upgrade", "--uninstall",
                  "--bootstrap-conda", "--offline-dir", "--yes", "--dry-run", "--use-system-ffmpeg"):
         assert flag in p.stdout
 
@@ -191,10 +203,11 @@ def test_dry_run_changes_nothing_and_prints_actions(rig):
                      r"--no-default-packages python=3.12 pip pyyaml jsonschema ffmpeg=7.1.1 tesseract=5.5.2 leptonica=1.87 pillow numpy\n", o)
     assert "pip install --no-deps --no-index --force-reinstall" in o
     assert "would write " + str(rig.launcher) in o
-    assert "| CMR_TESSERACT=" in o and "| PATH=\"$CMR_PREFIX/ffmpeg-bin:$PATH\"" in o
+    assert "| cmr_slate=1" in o and "| PATH=\"$CMR_BIN/ffmpeg-bin:$PATH\"" in o
     assert "Using the pinned, tested conda-forge ffmpeg 7.1.1" in o
     assert f"System ffmpeg {rig.sysbin}/ffmpeg is not used and not touched" in o
-    assert f"would link {rig.prefix}/ffmpeg-bin/ffmpeg -> {rig.env_dir}/bin/ffmpeg" in o
+    assert f"would link {rig.prefix}/ffmpeg-bin/ffmpeg -> ../env/bin/ffmpeg" in o
+    assert f"would link {rig.link} -> {rig.launcher}" in o
     assert "would ask" not in o
     assert "Production Python policy" in o
     # nothing written anywhere in HOME, conda only asked for its version
@@ -206,7 +219,7 @@ def test_dry_run_no_slate(rig):
     p = rig.run("--dry-run", "--no-slate")
     assert p.returncode == 0
     assert "tesseract" not in p.stdout.split("Packages")[1].splitlines()[0]
-    assert "CMR_TESSERACT" not in p.stdout
+    assert "| cmr_slate=0" in p.stdout
     assert "Slate OCR skipped (--no-slate)" in p.stdout
 
 
@@ -237,7 +250,7 @@ def test_ffmpeg_acceptance(rig, fake, ffmpeg, accepted, why):
         assert why in p.stderr and "the system ffmpeg cannot be used" in p.stderr
         assert "installing the pinned conda-forge ffmpeg 7.1.1 into cmr's own environment" in p.stdout
         assert pkgs.endswith("jsonschema ffmpeg=7.1.1 tesseract=5.5.2 leptonica=1.87 pillow numpy")   # one env
-        assert f"-> {rig.prefix}/env/bin/ffmpeg" in p.stdout and "ffmpeg-env" not in p.stdout
+        assert "ffmpeg -> ../env/bin/ffmpeg" in p.stdout and "ffmpeg-env" not in p.stdout
 
 
 @pytest.mark.parametrize("fake", [{}, {"FAKE_FF_VERSION": "7.1.1"}, {"FAKE_FF_VERSION": "5.1.10"}])
@@ -248,7 +261,7 @@ def test_default_always_uses_pinned_ffmpeg(rig, fake):
     assert p.returncode == 0, out(p)
     pkgs = p.stdout.split("Packages (conda-forge only): ")[1].splitlines()[0]
     assert "ffmpeg=7.1.1" in pkgs
-    assert f"would link {rig.prefix}/ffmpeg-bin/ffmpeg -> {rig.env_dir}/bin/ffmpeg" in p.stdout
+    assert f"would link {rig.prefix}/ffmpeg-bin/ffmpeg -> ../env/bin/ffmpeg" in p.stdout
     assert "WARNING" not in p.stderr
     assert not re.search(r"^ffmpeg ", rig.calls_text(), re.M)        # system ffmpeg not run
 
@@ -332,6 +345,14 @@ def test_bootstrap_installs_miniforge_after_checksum(rig):
     assert "| bash" not in rig.calls_text()
 
 
+def test_bootstrap_refuses_prefix_with_space(rig):
+    """Found on the Mac (2026-10-27): the Miniforge installer refuses a prefix with a space."""
+    root = rig.tmp / "Moved Folder/cmr"
+    p = rig.run("--yes", "--bootstrap-conda", "--root", str(root), conda=False)
+    assert p.returncode == 1 and "contains a space" in p.stderr and "nothing was changed" in p.stderr
+    assert not root.exists() and "curl -fsSL" not in rig.calls_text()
+
+
 def test_bootstrap_checksum_mismatch_not_run(rig):
     p = rig.run("--bootstrap-conda", conda=False, FAKE_SHA_BAD=1)
     assert p.returncode == 1 and "Miniforge checksum mismatch; not run" in p.stderr
@@ -394,10 +415,11 @@ def test_foreign_prefix_refused(rig):
 
 
 def test_foreign_launcher_refused(rig):
-    rig.launcher.parent.mkdir(parents=True)
-    rig.launcher.write_text("#!/bin/sh\nexec ~/envs/cmr/bin/cmr \"$@\"\n")
+    rig.link.parent.mkdir(parents=True)
+    rig.link.write_text("#!/bin/sh\nexec ~/envs/cmr/bin/cmr \"$@\"\n")
     p = rig.run("--yes")
     assert p.returncode == 1 and "is not a CheckMyRender launcher" in p.stderr
+    assert not rig.prefix.exists()
 
 
 def test_doctor_problems_fail_install(rig):
@@ -417,20 +439,24 @@ def test_install_system_ffmpeg(rig):
     assert re.search(r"^python -m pip install --no-deps --no-index --force-reinstall \S+\.whl "
                      r"PYTHONPATH=unset PIP_CONFIG_FILE=/dev/null$", calls, re.M)
     assert "python -m pip check" in calls
-    # launcher
+    # launcher: in the prefix, relocatable (no install path in it), PATH link to it
     text = rig.launcher.read_text()
     assert os.access(rig.launcher, os.X_OK)
     assert "CheckMyRender launcher (generated by install.sh)" in text
-    assert f"CMR_PREFIX='{rig.prefix}'" in text
-    assert 'PATH="$CMR_PREFIX/ffmpeg-bin:$PATH"; export PATH' in text
-    assert 'CMR_TESSERACT="$CMR_PREFIX/env/bin/tesseract"; export CMR_TESSERACT' in text
+    assert str(rig.home) not in text.replace(f"cmr_ffmpeg='{rig.sysbin}/ffmpeg'", "")
+    assert f"cmr_ffmpeg='{rig.sysbin}/ffmpeg'; cmr_ffprobe='{rig.sysbin}/ffprobe'" in text
+    assert "cmr_demo='demo'; cmr_work='work'" in text and "cmr_rooted=1" in text
+    assert 'PATH="$CMR_BIN/ffmpeg-bin:$PATH"; export PATH' in text
+    assert "CMR_TESSERACT=$CMR_ENV/bin/tesseract; export CMR_TESSERACT" in text
+    assert "TESSDATA_PREFIX=$CMR_ENV/share/tessdata; export TESSDATA_PREFIX" in text
     assert "unset PYTHONPATH PYTHONHOME" in text
-    assert text.rstrip().endswith('exec "$CMR_PREFIX/env/bin/cmr" "$@"')
-    assert os.readlink(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.sysbin / "ffmpeg")
-    assert os.readlink(rig.prefix / "ffmpeg-bin/ffprobe") == str(rig.sysbin / "ffprobe")
+    assert text.rstrip().endswith('exec "$CMR_ENV/bin/python" -I -m cmr "$@"')
+    assert os.readlink(rig.link) == str(rig.launcher)
+    assert link_target(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.sysbin / "ffmpeg")
+    assert link_target(rig.prefix / "ffmpeg-bin/ffprobe") == str(rig.sysbin / "ffprobe")
     # verification ran through the launcher: env tesseract, the accepted ffmpeg, clean PYTHONPATH
     assert (f"cmr doctor CMR_TESSERACT={rig.env_dir}/bin/tesseract ffmpeg={rig.sysbin}/ffmpeg "
-            "PYTHONPATH=unset TMPDIR=unset") in calls
+            f"PYTHONPATH=unset TMPDIR=unset TESSDATA_PREFIX={rig.env_dir}/share/tessdata") in calls
     assert "getconf" not in text                                          # macOS-only line
     assert "cmr check " in calls and "tesseract --version" in calls and "tesseract --list-langs" in calls
     assert "Self-test ok" in p.stdout
@@ -446,7 +472,7 @@ def test_install_system_ffmpeg(rig):
     assert "Production Python policy" in p.stdout
     # log: D29 line style, every line
     lines = [l for l in rig.log.read_text().splitlines() if LOG_LINE.match(l)]
-    assert lines and any("step 10/10" in l for l in lines)
+    assert lines and any("step 11/11" in l for l in lines)
     assert all(LOG_LINE.match(l) for l in rig.log.read_text().splitlines() if l[:2] == "20")
 
 
@@ -458,23 +484,25 @@ def test_install_env_ffmpeg_no_slate(rig):
                      r"--no-default-packages python=3.12 pip pyyaml jsonschema ffmpeg=7.1.1 pillow numpy$", calls, re.M)
     assert "ffmpeg-env" not in calls and not (rig.prefix / "ffmpeg-env").exists()
     text = rig.launcher.read_text()
-    assert "CMR_TESSERACT" not in text and "ffmpeg/ffprobe: env" in text
-    assert os.readlink(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.env_dir / "bin/ffmpeg")
-    assert os.readlink(rig.prefix / "ffmpeg-bin/ffprobe") == str(rig.env_dir / "bin/ffprobe")
+    assert "cmr_slate=0" in text and "cmr_ffmpeg=''; cmr_ffprobe=''" in text
+    assert os.readlink(rig.prefix / "ffmpeg-bin/ffmpeg") == "../env/bin/ffmpeg"      # relative: survives a move
+    assert link_target(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.env_dir / "bin/ffmpeg")
+    assert link_target(rig.prefix / "ffmpeg-bin/ffprobe") == str(rig.env_dir / "bin/ffprobe")
     assert f"ffmpeg={rig.env_dir}/bin/ffmpeg" in calls        # cmr sees the env ffmpeg first
     assert "tesseract" not in calls
     assert "is not on your PATH" not in p.stdout and "Run: cmr doctor" in p.stdout
 
 
 def test_launcher_quotes_prefix(rig):
+    """A folder name with a quote and a space: the launcher runs and cmr-paths.conf sources."""
     pre = rig.tmp / "it's here"
     p = rig.run("--yes", "--prefix", str(pre))
     assert p.returncode == 0, out(p)
-    assert "CMR_PREFIX='" + str(pre).replace("'", "'\\''") + "'" in rig.launcher.read_text()
-    r = subprocess.run(["sh", "-c", 'eval "$(grep ^CMR_PREFIX= "$1")"; echo "$CMR_PREFIX"', "x", str(rig.launcher)],
-                       capture_output=True, text=True, env={"PATH": "/usr/bin:/bin", "FAKE_CALLS": "/dev/null",
-                                                            "FAKES": str(FAKES)})
-    assert r.stdout.strip() == str(pre)
+    assert os.readlink(rig.link) == str(pre / "cmr")
+    conf = pre / "cmr-paths.conf"
+    r = subprocess.run(["sh", "-c", '. "$1"; printf "%s|%s|%s" "$CMR_BIN" "$CMR_LAUNCHER" "$CMR_ROOT"', "x", str(conf)],
+                       capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
+    assert r.stdout == f"{pre}|{pre}/cmr|"              # --prefix outside the root: no CMR_ROOT
 
 
 # --- idempotence / upgrade ------------------------------------------------------------------
@@ -557,7 +585,7 @@ def test_env_ffmpeg_and_tesseract_share_one_env(rig):
     assert re.search(r"^conda create -y -q -p \S+/env --override-channels -c conda-forge --no-default-packages "
                      r"python=3.12 pip pyyaml jsonschema ffmpeg=7.1.1 tesseract=5.5.2 leptonica=1.87 pillow numpy$", calls, re.M)
     assert calls.count("conda create") == 1 and "ffmpeg-env" not in calls
-    assert os.readlink(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.env_dir / "bin/ffmpeg")
+    assert link_target(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.env_dir / "bin/ffmpeg")
     assert (f"cmr doctor CMR_TESSERACT={rig.env_dir}/bin/tesseract ffmpeg={rig.env_dir}/bin/ffmpeg") in calls
     state = (rig.prefix / "install-state").read_text()
     assert "ffmpeg_mode=env\n" in state and f"ffmpeg={rig.env_dir}/bin/ffmpeg\n" in state
@@ -578,7 +606,7 @@ def test_rerun_adds_ffmpeg_when_system_one_turns_bad(rig):
     # ffmpeg goes into the existing env next to tesseract (no separate ffmpeg env since 7.1)
     assert re.search(r"^conda install -y -q -p \S+/env .* ffmpeg=7\.1\.1 tesseract=5\.5\.2", rig.calls_text(), re.M)
     assert "conda create" not in rig.calls_text() and not (rig.prefix / "ffmpeg-env").exists()
-    assert os.readlink(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.env_dir / "bin/ffmpeg")
+    assert link_target(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.env_dir / "bin/ffmpeg")
     rig.reset_calls()                                 # next run: nothing to add
     p = rig.run("--yes", "--use-system-ffmpeg", FAKE_FF_MISSING="lut2")
     assert p.returncode == 0, out(p)
@@ -587,7 +615,7 @@ def test_rerun_adds_ffmpeg_when_system_one_turns_bad(rig):
     rig.reset_calls()                                 # system ffmpeg good again + opt-in: it wins
     p = rig.run("--yes", "--use-system-ffmpeg")
     assert p.returncode == 0, out(p)
-    assert os.readlink(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.sysbin / "ffmpeg")
+    assert link_target(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.sysbin / "ffmpeg")
     assert "conda install" not in rig.calls_text()
 
 
@@ -599,7 +627,7 @@ def test_rerun_without_flag_moves_system_install_to_pinned_ffmpeg(rig):
     p = rig.run("--yes", "--use-system-ffmpeg")            # opt-in again: nothing changes
     assert p.returncode == 0, out(p)
     assert "conda install" not in rig.calls_text()
-    assert os.readlink(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.sysbin / "ffmpeg")
+    assert link_target(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.sysbin / "ffmpeg")
     rig.reset_calls()
     p = rig.run("--yes")
     assert p.returncode == 0, out(p)
@@ -607,7 +635,7 @@ def test_rerun_without_flag_moves_system_install_to_pinned_ffmpeg(rig):
     assert re.search(r"^conda install -y -q -p \S+/env .* ffmpeg=7\.1\.1", rig.calls_text(), re.M)
     assert "pip install" not in rig.calls_text()            # same version: only the package added
     for t in ("ffmpeg", "ffprobe"):
-        assert os.readlink(rig.prefix / "ffmpeg-bin" / t) == str(rig.env_dir / "bin" / t)
+        assert link_target(rig.prefix / "ffmpeg-bin" / t) == str(rig.env_dir / "bin" / t)
     state = (rig.prefix / "install-state").read_text()
     assert "ffmpeg_mode=env\n" in state and f"ffmpeg={rig.env_dir}/bin/ffmpeg\n" in state
     assert f"cmr doctor CMR_TESSERACT={rig.env_dir}/bin/tesseract ffmpeg={rig.env_dir}/bin/ffmpeg" in rig.calls_text()
@@ -622,7 +650,7 @@ def test_rerun_needing_ffmpeg_checks_free_space(rig):
     assert rig.run("--yes", "--use-system-ffmpeg").returncode == 0
     p = rig.run("--yes", FAKE_DF_AVAIL_KB=800 * 1024)      # enough for an update, not for ffmpeg
     assert p.returncode == 1 and "about 1024 MB needed" in p.stderr
-    assert os.readlink(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.sysbin / "ffmpeg")
+    assert link_target(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.sysbin / "ffmpeg")
     p = rig.run("--yes", "--use-system-ffmpeg", FAKE_DF_AVAIL_KB=800 * 1024)
     assert p.returncode == 0, out(p)
 
@@ -663,7 +691,7 @@ def test_migration_from_ffmpeg_env_into_env(rig):
     assert not re.search(r"^conda .*ffmpeg-env", calls, re.M)
     assert not (rig.prefix / "ffmpeg-env").exists()
     for t in ("ffmpeg", "ffprobe"):
-        assert os.readlink(rig.prefix / "ffmpeg-bin" / t) == str(rig.env_dir / "bin" / t)
+        assert link_target(rig.prefix / "ffmpeg-bin" / t) == str(rig.env_dir / "bin" / t)
     assert f"cmr doctor CMR_TESSERACT={rig.env_dir}/bin/tesseract ffmpeg={rig.env_dir}/bin/ffmpeg" in calls
     assert "Migrated: removed the old separate ffmpeg environment" in p.stdout
     assert "remove the old separate ffmpeg environment" in rig.log.read_text()
@@ -682,7 +710,7 @@ def test_migration_from_ffmpeg_env_system_ffmpeg_good(rig):
     assert p.returncode == 0, out(p)
     assert "conda install" not in rig.calls_text()
     assert not (rig.prefix / "ffmpeg-env").exists() and not (rig.env_dir / "bin/ffmpeg").exists()
-    assert os.readlink(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.sysbin / "ffmpeg")
+    assert link_target(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.sysbin / "ffmpeg")
     assert "Migrated" in p.stdout
 
 
@@ -692,7 +720,7 @@ def test_migration_keeps_ffmpeg_env_when_conda_fails(rig):
     p = rig.run("--yes", ffmpeg=False, FAKE_CONDA_FAIL=1)
     assert p.returncode == 1 and "conda could not update the environment" in p.stderr
     assert (rig.prefix / "ffmpeg-env/bin/ffmpeg").exists()
-    assert os.readlink(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.prefix / "ffmpeg-env/bin/ffmpeg")
+    assert link_target(rig.prefix / "ffmpeg-bin/ffmpeg") == str(rig.prefix / "ffmpeg-env/bin/ffmpeg")
 
 
 def test_incomplete_env_is_recreated(rig):
@@ -708,12 +736,12 @@ def test_bin_dir_option_is_remembered(rig):
     rig.workspace = rig.tmp / "ws"
     p = rig.run("--yes", "--bin-dir", str(bindir), "--workspace", str(rig.workspace))
     assert p.returncode == 0, out(p)
-    assert (bindir / "cmr").exists() and not rig.launcher.exists()
+    assert os.readlink(bindir / "cmr") == str(rig.launcher) and not rig.link.exists()
     assert f"bin_dir={bindir}\n" in (rig.prefix / "install-state").read_text()
     assert f"export PATH=\"{bindir}:$PATH\"" in p.stdout
     p = rig.run("--yes")                              # re-run without the flag: same folder
     assert p.returncode == 0, out(p)
-    assert not rig.launcher.exists()
+    assert not rig.link.exists() and not os.path.lexists(rig.link)
     p = rig.run("--uninstall", "--yes")               # uninstall finds the launcher there
     assert p.returncode == 0, out(p)
     assert f"Kept: your workspace ({rig.workspace})" in p.stdout
@@ -877,8 +905,8 @@ def test_uninstall_yes_removes_only_cmr(rig):
     assert rig.run("--yes").returncode == 0
     p = rig.run("--uninstall", stdin="y\n")
     assert p.returncode == 0, out(p)
-    assert not rig.prefix.exists() and not rig.launcher.exists()
-    assert rig.workspace.exists() and rig.log.exists()             # kept
+    assert not rig.prefix.exists() and not os.path.lexists(rig.link)
+    assert rig.workspace.exists() and rig.log.exists() and rig.work.exists()   # kept
     assert (rig.home / ".local/bin").exists()                       # only our file removed
 
 
@@ -892,9 +920,309 @@ def test_uninstall_refuses_foreign_prefix(rig):
 
 def test_uninstall_keeps_foreign_launcher(rig):
     assert rig.run("--yes").returncode == 0
-    rig.launcher.write_text("#!/bin/sh\necho mine\n")
+    rig.link.unlink()
+    rig.link.write_text("#!/bin/sh\necho mine\n")
     assert rig.run("--uninstall", "--yes").returncode == 0
-    assert rig.launcher.read_text() == "#!/bin/sh\necho mine\n"
+    assert rig.link.read_text() == "#!/bin/sh\necho mine\n"
+    assert not rig.prefix.exists()
+
+
+# --- single cmr folder (D33): --root, PATH link, work area, relocatable launcher, moves -----
+def conf_of(prefix: Path) -> dict:
+    """cmr-paths.conf read by sh itself (it is sh syntax)."""
+    keys = ("CMR_VERSION CMR_ROOT CMR_BIN CMR_LAUNCHER CMR_ENV CMR_FFMPEG CMR_FFPROBE "
+            "CMR_TESSERACT CMR_TESSDATA CMR_DEMO CMR_WORK").split()
+    script = '. "$1"; for k in ' + " ".join(keys) + '; do eval "printf \'%s=%s\\\\n\' $k \\"\\$$k\\""; done'
+    r = subprocess.run(["sh", "-c", script, "x", str(prefix / "cmr-paths.conf")],
+                       capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
+    assert r.returncode == 0, r.stderr
+    return dict(l.split("=", 1) for l in r.stdout.splitlines())
+
+
+def run_launcher(rig, cmd, *args, cwd=None, path=None):
+    """Run the launcher (or a link to it) like a user would: /bin/sh script, fake tools on PATH."""
+    env = {"HOME": str(rig.home), "PATH": path or rig.path(), "FAKES": str(FAKES), "FAKE_CALLS": str(rig.calls)}
+    return subprocess.run([str(cmd), *args], env=env, capture_output=True, text=True, cwd=cwd or rig.tmp)
+
+
+def test_root_layout(rig):
+    root = rig.tmp / "Tools/cmr"
+    p = rig.run("--yes", "--root", str(root))
+    assert p.returncode == 0, out(p)
+    b = root / "bin"
+    for f in ("cmr", "env/bin/python", "ffmpeg-bin/ffmpeg", "install-state", "cmr-paths.conf", ".cmr-install-prefix"):
+        assert os.path.lexists(b / f), f
+    assert (root / "demo/templates/specs/spec_review_render.yaml").exists()
+    assert (root / "demo/demo_spots/clean").is_dir()
+    for d in ("specs", "profiles", "jobs", "reports"):
+        assert (root / "work" / d).is_dir(), d
+    assert (root / "work/jobs/job_template.yaml").read_text() == "seed jobs/job_template.yaml\n"
+    assert os.readlink(rig.link) == str(b / "cmr")
+    assert not (rig.home / "cmr").exists()                    # nothing in the default root
+    c = conf_of(b)
+    assert c == {"CMR_VERSION": "0.0.1", "CMR_ROOT": str(root), "CMR_BIN": str(b), "CMR_LAUNCHER": str(b / "cmr"),
+                 "CMR_ENV": str(b / "env"), "CMR_FFMPEG": str(b / "env/bin/ffmpeg"),
+                 "CMR_FFPROBE": str(b / "env/bin/ffprobe"), "CMR_TESSERACT": str(b / "env/bin/tesseract"),
+                 "CMR_TESSDATA": str(b / "env/share/tessdata"), "CMR_DEMO": str(root / "demo"),
+                 "CMR_WORK": str(root / "work")}
+    assert (b / "cmr-paths.conf").read_text().startswith(f"# for {b} 0.0.1\n")
+    state = (b / "install-state").read_text()
+    for kv in (f"prefix={b}", f"root={root}", f"workspace={root}/demo", f"work={root}/work", f"bin_dir={rig.home}/.local/bin"):
+        assert kv + "\n" in state, kv
+    assert f"cmr doctor CMR_TESSERACT={b}/env/bin/tesseract" in rig.calls_text()      # through the link
+    assert f"PATH link   : {rig.link} -> {b}/cmr" in p.stdout and f"Work area   : {root}/work" in p.stdout
+    p = rig.run("--uninstall", "--yes", "--root", str(root))
+    assert p.returncode == 0, out(p)
+    assert not b.exists() and not os.path.lexists(rig.link)
+    assert (root / "demo").exists() and (root / "work/jobs/job_template.yaml").exists()   # kept
+    assert f"your work area ({root}/work)" in p.stdout
+
+
+def test_root_refused(rig):
+    for r in (str(rig.home), "/"):
+        p = rig.run("--dry-run", "--root", r)
+        assert p.returncode == 2 and "refusing --root" in p.stderr
+
+
+def test_dry_run_root_writes_nothing(rig):
+    p = rig.run("--dry-run", "--root", str(rig.tmp / "x/cmr"))
+    assert p.returncode == 0, out(p)
+    assert "would create " + str(rig.tmp / "x/cmr/work") in p.stdout
+    assert not (rig.tmp / "x").exists() and list(rig.home.iterdir()) == []
+
+
+def test_bin_dir_equal_to_prefix_makes_no_link(rig):
+    p = rig.run("--yes", "--bin-dir", str(rig.prefix))
+    assert p.returncode == 0, out(p)
+    assert rig.launcher.is_file() and not rig.launcher.is_symlink() and not os.path.lexists(rig.link)
+    assert "PATH link" not in p.stdout
+    assert rig.run("--uninstall", "--yes").returncode == 0 and not rig.prefix.exists()
+
+
+def test_link_safety(rig):
+    """The PATH link: a foreign link is refused (nothing changed), a dangling one is repaired, a link
+    to another CheckMyRender launcher is re-pointed; uninstall removes only a link to this launcher."""
+    rig.link.parent.mkdir(parents=True)
+    foreign = rig.tmp / "devcmr"
+    foreign.write_text("#!/bin/sh\necho dev\n")
+    rig.link.symlink_to(foreign)
+    p = rig.run("--yes")
+    assert p.returncode == 1 and f"{rig.link} is a link to {foreign}, which is not a CheckMyRender launcher" in p.stderr
+    assert os.readlink(rig.link) == str(foreign) and not rig.prefix.exists()
+    rig.link.unlink()
+    rig.link.symlink_to(rig.tmp / "gone/bin/cmr")                    # dangling (folder moved away)
+    p = rig.run("--yes")
+    assert p.returncode == 0, out(p)
+    assert "Repaired the PATH link" in p.stdout and os.readlink(rig.link) == str(rig.launcher)
+    other = rig.tmp / "other/bin/cmr"                                  # another install's launcher
+    other.parent.mkdir(parents=True)
+    other.write_text("#!/bin/sh\n# CheckMyRender launcher (generated by install.sh)\n")
+    rig.link.unlink()
+    rig.link.symlink_to(other)
+    p = rig.run("--yes")
+    assert p.returncode == 0 and "now points to this install" in p.stdout
+    assert os.readlink(rig.link) == str(rig.launcher)
+    rig.link.unlink()                                                  # user points it elsewhere
+    rig.link.symlink_to(other)
+    p = rig.run("--uninstall", "--yes")
+    assert p.returncode == 0 and f"Kept: {rig.link} (it points to {other}" in p.stdout
+    assert os.readlink(rig.link) == str(other) and not rig.prefix.exists()
+
+
+def test_launcher_finds_itself_through_links(rig):
+    """Through the PATH link, a chain of two links (one relative), from another folder and by
+    PATH lookup: every path comes from the real launcher folder."""
+    assert rig.run("--yes").returncode == 0
+    a = rig.tmp / "links/a"
+    a.parent.mkdir()
+    a.symlink_to(os.path.relpath(rig.link, a.parent))                  # relative -> absolute link -> launcher
+    for cmd, path in ((rig.link, None), (a, None), ("cmr", f"{rig.link.parent}:{rig.path()}")):
+        rig.reset_calls()
+        r = run_launcher(rig, cmd, "doctor", cwd=rig.home, path=path)
+        assert r.returncode == 0, r.stderr
+        assert (f"cmr doctor CMR_TESSERACT={rig.env_dir}/bin/tesseract ffmpeg={rig.env_dir}/bin/ffmpeg "
+                f"PYTHONPATH=unset TMPDIR=unset TESSDATA_PREFIX={rig.env_dir}/share/tessdata") in rig.calls_text(), cmd
+
+
+def test_moved_folder_launcher_repairs_paths_file(rig):
+    """mv of the whole cmr folder: the launcher runs from the new place (ffmpeg links are
+    relative, tesseract/tessdata follow), rewrites cmr-paths.conf once, tolerates a read-only folder."""
+    assert rig.run("--yes").returncode == 0
+    new = rig.tmp / "elsewhere/cmr"
+    new.parent.mkdir()
+    shutil.move(str(rig.root), str(new))
+    b = new / "bin"
+    assert conf_of(b)["CMR_BIN"] == str(rig.prefix)                    # stale until the first start
+    rig.reset_calls()
+    r = run_launcher(rig, b / "cmr", "doctor")
+    assert r.returncode == 0 and r.stderr == "", r.stderr
+    assert (f"cmr doctor CMR_TESSERACT={b}/env/bin/tesseract ffmpeg={b}/env/bin/ffmpeg "
+            f"PYTHONPATH=unset TMPDIR=unset TESSDATA_PREFIX={b}/env/share/tessdata") in rig.calls_text()
+    c = conf_of(b)
+    assert c["CMR_BIN"] == str(b) and c["CMR_ROOT"] == str(new) and c["CMR_WORK"] == str(new / "work")
+    assert c["CMR_DEMO"] == str(new / "demo") and c["CMR_FFMPEG"] == str(b / "env/bin/ffmpeg")
+    assert not list(b.glob("cmr-paths.conf.tmp.*"))
+    mtime = (b / "cmr-paths.conf").stat().st_mtime_ns
+    assert run_launcher(rig, b / "cmr", "--version").returncode == 0
+    assert (b / "cmr-paths.conf").stat().st_mtime_ns == mtime          # current: not rewritten
+    # moved again into a read-only place: runs, says nothing, the stale file stays
+    new2 = rig.tmp / "ro/cmr"
+    new2.parent.mkdir()
+    shutil.move(str(new), str(new2))
+    (new2 / "bin").chmod(0o555)
+    try:
+        r = run_launcher(rig, new2 / "bin/cmr", "doctor")
+        assert r.returncode == 0 and r.stderr == "", r.stderr
+        assert conf_of(new2 / "bin")["CMR_BIN"] == str(b)
+    finally:
+        (new2 / "bin").chmod(0o755)
+
+
+def test_moved_install_is_installed_fresh(rig):
+    """The installer pointed at a moved folder: no conda repair, a fresh install of the same
+    version (env rebuilt with conda create, wheel installed), demo/ and work/ kept untouched,
+    the dangling PATH link repaired, state and paths file at the new place."""
+    assert rig.run("--yes").returncode == 0
+    (rig.work / "specs/mine.yaml").write_text("mine\n")
+    new = rig.tmp / "moved/cmr"
+    new.parent.mkdir()
+    shutil.move(str(rig.root), str(new))
+    assert not rig.link.exists()                                      # dangling now
+    rig.reset_calls()
+    p = rig.run("--yes", "--root", str(new))
+    assert p.returncode == 0, out(p)
+    assert f"This cmr folder was moved: installed at {rig.prefix}, now at {new}/bin" in p.stdout
+    assert "installs cmr 0.0.1 FRESH here" in p.stdout
+    calls = rig.calls_text()
+    assert re.search(rf"^conda create -y -q -p {re.escape(str(new))}/bin/env ", calls, re.M)
+    assert "pip install --no-deps" in calls and not demo_calls(rig)
+    assert not list((new / "bin").glob("*.before-move"))
+    assert "Repaired the PATH link" in p.stdout and os.readlink(rig.link) == str(new / "bin/cmr")
+    assert (new / "work/specs/mine.yaml").read_text() == "mine\n" and "Already set up" in p.stdout
+    assert "Already created before" in p.stdout                        # demo record moved along
+    state = (new / "bin/install-state").read_text()
+    assert f"prefix={new}/bin\n" in state and f"workspace={new}/demo\n" in state and f"work={new}/work\n" in state
+    assert conf_of(new / "bin")["CMR_BIN"] == str(new / "bin")
+    rig.reset_calls()                                                  # next run: a normal re-run
+    p = rig.run("--yes", "--root", str(new))
+    assert p.returncode == 0 and "This cmr folder was moved" not in p.stdout and "conda create" not in rig.calls_text()
+
+
+def test_moved_install_failure_puts_old_env_back(rig):
+    assert rig.run("--yes").returncode == 0
+    new = rig.tmp / "moved/cmr"
+    new.parent.mkdir()
+    shutil.move(str(rig.root), str(new))
+    p = rig.run("--yes", "--root", str(new), FAKE_CONDA_FAIL=1)
+    assert p.returncode == 1 and "conda could not create the environment" in p.stderr
+    assert "Put back the previous env/" in p.stderr
+    assert (new / "bin/env/bin/python").exists() and not (new / "bin/env.before-move").exists()
+
+
+def test_moved_install_with_own_miniforge_bootstraps_again(rig):
+    assert rig.run("--yes", "--bootstrap-conda", conda=False).returncode == 0
+    new = rig.tmp / "moved/cmr"
+    new.parent.mkdir()
+    shutil.move(str(rig.root), str(new))
+    rig.reset_calls()
+    p = rig.run("--root", str(new), conda=False)                       # no --yes: no question asked
+    assert p.returncode == 0, out(p)
+    assert "own Miniforge is not used after the move" in p.stdout
+    assert f"-b -p {new}/bin/conda" in rig.log.read_text()
+    assert f"conda={new}/bin/conda/bin/conda\n" in (new / "bin/install-state").read_text()
+
+
+def test_work_area_seeded_once_never_overwritten(rig):
+    mine = rig.work / "jobs/job_template.yaml"                         # exists before the first install
+    mine.parent.mkdir(parents=True)
+    mine.write_text("my job\n")
+    p = rig.run("--yes")
+    assert p.returncode == 0, out(p)
+    assert mine.read_text() == "my job\n" and "(1 existing files kept)" in p.stdout
+    assert (rig.work / "README.md").read_text() == "seed README.md\n"
+    listed = (rig.work / ".cmr-work-files").read_text().splitlines()
+    assert sorted(listed) == ["README.md", "profiles/client_review.yaml", "specs/spec_review_render.yaml"]
+    (rig.work / "README.md").unlink()                                 # the user deletes/edits seeds
+    (rig.work / "specs/spec_review_render.yaml").write_text("edited\n")
+    new = make_bundle(rig.tmp / "bundle2", version="0.0.2")
+    (new / "work/README.md").write_text("seed v2\n")
+    write_sums(new)
+    for bundle, args in ((rig.bundle, ()), (rig.bundle, ("--upgrade",)), (new, ())):
+        rig.bundle = bundle
+        p = rig.run("--yes", *args)
+        assert p.returncode == 0, out(p)
+        assert "Already set up" in p.stdout
+        assert not (rig.work / "README.md").exists()
+        assert (rig.work / "specs/spec_review_render.yaml").read_text() == "edited\n"
+    assert rig.run("--uninstall", "--yes").returncode == 0
+    assert (rig.work / "specs/spec_review_render.yaml").exists() and (rig.work / ".cmr-work-files").exists()
+
+
+def test_no_work(rig):
+    p = rig.run("--yes", "--no-work")
+    assert p.returncode == 0, out(p)
+    assert not rig.work.exists() and "Skipped (--no-work)" in p.stdout
+    assert "cmr_work=''" in rig.launcher.read_text() and conf_of(rig.prefix)["CMR_WORK"] == ""
+
+
+def old_layout_install(rig):
+    """An install made by the installer before D33: prefix ~/.local/share/cmr, workspace
+    ~/cmr-workspace, a launcher FILE in ~/.local/bin, state without prefix/root/work."""
+    legacy = rig.home / ".local/share/cmr"
+    ws = rig.home / "cmr-workspace"
+    assert rig.run("--yes", "--prefix", str(legacy), "--workspace", str(ws), "--no-work").returncode == 0
+    (legacy / "cmr").unlink()
+    (legacy / "cmr-paths.conf").unlink()
+    rig.link.unlink()
+    rig.link.write_text(f"#!/bin/sh\n# CheckMyRender launcher (generated by install.sh)\nCMR_PREFIX='{legacy}'\n"
+                        'exec "$CMR_PREFIX/env/bin/cmr" "$@"\n')
+    rig.link.chmod(0o755)
+    st = legacy / "install-state"
+    st.write_text("".join(l for l in st.read_text().splitlines(keepends=True)
+                          if not l.startswith(("prefix=", "root=", "work="))))
+    rig.reset_calls()
+    return legacy, ws
+
+
+def test_old_layout_rerun_upgrade_uninstall(rig):
+    legacy, ws = old_layout_install(rig)
+    p = rig.run("--yes")
+    assert p.returncode == 0, out(p)
+    assert f"Previous layout found: {legacy}" in p.stdout and "--uninstall, then" in p.stdout
+    assert "Replaced the launcher file" in p.stdout and os.readlink(rig.link) == str(legacy / "cmr")
+    assert "conda create" not in rig.calls_text() and "This cmr folder was moved" not in p.stdout
+    assert not (rig.home / "cmr").exists()                            # the new default root is not created
+    assert f"workspace={ws}\n" in (legacy / "install-state").read_text()
+    assert run_launcher(rig, rig.link, "doctor").returncode == 0
+    new = make_bundle(rig.tmp / "bundle2", version="0.0.2")
+    rig.bundle = new
+    p = rig.run("--yes")
+    assert p.returncode == 0 and "Upgrade in place: cmr 0.0.1 -> 0.0.2" in p.stdout
+    p = rig.run("--uninstall", "--yes")
+    assert p.returncode == 0, out(p)
+    assert not legacy.exists() and not os.path.lexists(rig.link) and ws.exists()
+
+
+def test_old_layout_launcher_file_uninstall(rig):
+    """Uninstall straight from the old layout removes the old launcher FILE (marker) too."""
+    legacy, ws = old_layout_install(rig)
+    p = rig.run("--uninstall", "--yes")
+    assert p.returncode == 0 and "(previous layout)" in p.stdout
+    assert not legacy.exists() and not rig.link.exists() and ws.exists()
+
+
+def test_single_folder_trial_state(rig):
+    """The hand-made trial (D33): --prefix ROOT/bin --bin-dir ROOT/bin, a state without prefix=;
+    a run with --root makes the PATH link in ~/.local/bin instead of reusing bin_dir=prefix."""
+    assert rig.run("--yes", "--bin-dir", str(rig.prefix)).returncode == 0
+    st = rig.prefix / "install-state"
+    st.write_text("".join(l for l in st.read_text().splitlines(keepends=True)
+                          if not l.startswith(("prefix=", "root=", "work="))))
+    shutil.rmtree(rig.work)
+    p = rig.run("--yes", "--root", str(rig.root))
+    assert p.returncode == 0, out(p)
+    assert "This cmr folder was moved" not in p.stdout and os.readlink(rig.link) == str(rig.launcher)
+    assert (rig.work / "jobs/job_template.yaml").exists()
 
 
 # --- bundle builder -------------------------------------------------------------------------
@@ -936,10 +1264,14 @@ def test_bundle_contents(built):
               "SHA256SUMS", f"wheels/check_my_render-{version}-py3-none-any.whl",
               "templates/README.md", "templates/specs/spec_review_render.yaml",
               "templates/starter/job.yaml", "templates/starter/media/README.txt",
-              "demo/make_spot.py", "demo/values_fictional.yaml"):
+              "demo/make_spot.py", "demo/values_fictional.yaml", "work/README.md",
+              "work/jobs/job_template.yaml", "work/specs/spec_review_render.yaml",
+              "work/profiles/client_review.yaml"):
         assert f in files, f
     for f in ("make_spot.py", "values_fictional.yaml"):      # the test copy is the single source
         assert (top / "demo" / f).read_bytes() == (ROOT / "tests/slate" / f).read_bytes()
+    assert (top / "work/specs/spec_review_render.yaml").read_bytes() == (ROOT / "templates/specs/spec_review_render.yaml").read_bytes()
+    assert (top / "work/profiles/client_review.yaml").read_bytes() == (ROOT / "templates/profiles/client_review.yaml").read_bytes()
     assert not [f for f in files if f.endswith(".mov")]
     assert not [f for f in files if f.endswith("CLAUDE.md") or "__pycache__" in f]
     src = {str(p.relative_to(ROOT)) for d in ("examples", "templates") for p in (ROOT / d).rglob("*")
@@ -997,7 +1329,7 @@ def test_real_bundle_installs_with_fakes(built, tmp_path):
     p = r.run("--yes")
     assert p.returncode == 0, out(p)
     assert "Using the pinned, tested conda-forge ffmpeg 7.1.1" in p.stdout
-    assert os.readlink(r.prefix / "ffmpeg-bin/ffmpeg") == str(r.env_dir / "bin/ffmpeg")
+    assert link_target(r.prefix / "ffmpeg-bin/ffmpeg") == str(r.env_dir / "bin/ffmpeg")
     assert not list(r.workspace.rglob("CLAUDE.md")) and (r.workspace / "examples/spot_xr/job.yaml").exists()
     assert (r.workspace / f"templates/starter/media/{DEMO_CLEAN}").exists()     # bundled generator (faked)
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Fake cmr console script. Records how the launcher set it up.
-echo "cmr $1 CMR_TESSERACT=${CMR_TESSERACT:-unset} ffmpeg=$(readlink -f "$(command -v ffmpeg)") PYTHONPATH=${PYTHONPATH:-unset} TMPDIR=${TMPDIR:-unset}" >>"$FAKE_CALLS"
+echo "cmr $1 CMR_TESSERACT=${CMR_TESSERACT:-unset} ffmpeg=$(readlink -f "$(command -v ffmpeg)") PYTHONPATH=${PYTHONPATH:-unset} TMPDIR=${TMPDIR:-unset} TESSDATA_PREFIX=${TESSDATA_PREFIX:-unset}" >>"$FAKE_CALLS"
 case $1 in
     --version) echo "cmr 0.0.1";;
     doctor) echo "ffmpeg: $(command -v ffmpeg)"

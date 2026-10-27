@@ -8,7 +8,9 @@ Rocky machine and the Mac ("ffmpeg 7.1 single env" below). **Pinned ffmpeg by de
 (2026-10-26, user decision):** every install gets conda-forge ffmpeg 7.1.1; the system ffmpeg only
 with `--use-system-ffmpeg` (tested with fakes + a real `--dry-run`; no real install yet).
 **Demo spots at install time (2026-10-26, user decision):** real runs on Rocky and the Mac (see
-"Demo spots" below). Still pre-release (D22).
+"Demo spots" below). **Single cmr folder (D33, 2026-10-27):** `--root`, PATH link, work area,
+relocatable launcher, `cmr-paths.conf`, moved-install rule; tested with fakes (also bash 3.2),
+real runs on Linux and the Mac (see "Single cmr folder" below).
 
 ## Files
 | File | Role |
@@ -16,6 +18,7 @@ with `--use-system-ffmpeg` (tested with fakes + a real `--dry-run`; no real inst
 | `build_bundle.sh` | builds `dist/cmr-<version>-bundle.tar.gz` (+ `.sha256`) from the source tree |
 | `install.sh` | the installer shipped in the bundle (bash, per user, no sudo) |
 | `environment.yml` | conda package list (tags `# cmr:ffmpeg`, `# cmr:slate`, `# cmr:demo`); install.sh reads it |
+| `work/` | seeds of the user's work area: `README.md`, `jobs/job_template.yaml` (the bundle adds `specs/spec_review_render.yaml` and `profiles/client_review.yaml` from templates/) |
 | `.gitignore` | `dist/` |
 | `../tests/installer/` | pytest: fakes for conda/ffmpeg/curl/df/uname/id/sysctl/sw_vers/getconf, temp HOME, no network |
 
@@ -23,8 +26,11 @@ with `--use-system-ffmpeg` (tested with fakes + a real `--dry-run`; no real inst
 `cmr-<v>/`: `install.sh`, `environment.yml`, `required_filters.txt`, `VERSION`, `README.txt`,
 `README.md`, `USERGUIDE.md`, `wheels/check_my_render-<v>-py3-none-any.whl`, `examples/` + `templates/` (no CLAUDE.md, no
 caches), `demo/make_spot.py` + `demo/values_fictional.yaml` (copied from `tests/slate/` at build
-time: the test script is the single source, no second copy in git), `SHA256SUMS` (every file but
-itself). Version = `cmr.__version__`.
+time: the test script is the single source, no second copy in git), `work/` (installer/work +
+copies of templates/specs/spec_review_render.yaml and templates/profiles/client_review.yaml),
+`SHA256SUMS` (every file but itself). Version = `cmr.__version__`.
+- `--python ~/anaconda3/bin/python` works on the dev machine (setuptools, wheel, PyYAML,
+  jsonschema; 2026-10-27).
 - The wheel is built offline: `pip wheel --no-deps --no-index --no-build-isolation` in a temp
   COPY of pyproject/src/profiles (no build/ or egg-info in the repo). Needs setuptools + wheel
   for `--python` (here `/usr/bin/python3`: setuptools 78.1, wheel 0.42; the pyenv `python3`
@@ -35,22 +41,28 @@ itself). Version = `cmr.__version__`.
   (the same list `cmr doctor` checks: one source of truth). 15 filters at 0.0.1.
 
 ## install.sh
-Flags: `--prefix DIR` (default `~/.local/share/cmr`), `--workspace DIR` (default
-`~/cmr-workspace`), `--no-demo` (no demo spots, no Pillow/numpy; NOT remembered, like
-`--no-slate`), `--bin-dir DIR` (launcher folder, default `~/.local/bin`; a re-run,
-`--upgrade` or `--uninstall` of the same prefix reuses the previous `--workspace`/`--bin-dir`
-from install-state unless given again), `--no-slate`, `--use-system-ffmpeg` (NOT remembered:
-give it on every run), `--upgrade`, `--uninstall`, `--bootstrap-conda`,
+Flags: `--root DIR` (default `~/cmr`; D33: prefix `DIR/bin`, workspace `DIR/demo`, work area
+`DIR/work`), `--prefix DIR` (override of `ROOT/bin`), `--workspace DIR` (override of
+`ROOT/demo`), `--bin-dir DIR` (folder of the PATH LINK `DIR/cmr` -> `<prefix>/cmr`, default
+`~/.local/bin`; no link when DIR is the prefix; a re-run, `--upgrade` or `--uninstall` of the
+same prefix reuses the previous `--workspace`/`--bin-dir`/work area from install-state unless
+given again), `--no-work` (no work area; NOT remembered), `--no-demo` (no demo spots, no
+Pillow/numpy; NOT remembered, like `--no-slate`), `--no-slate`, `--use-system-ffmpeg` (NOT
+remembered: give it on every run), `--upgrade`, `--uninstall`, `--bootstrap-conda`,
 `--offline-dir DIR` (hook only: exits 2 "planned"), `-y/--yes`, `-n/--dry-run`, `-h`.
+`--root` is refused when it is `/`, your home or one of its ancestors (exit 2), like `--prefix`.
 Exit: 0 done, 1 failed (log kept), 2 usage / unsupported platform / root, 3 cancelled.
 
-Layout: `<prefix>/env` (ONE conda env: python, cmr, tesseract and conda-forge ffmpeg 7.1.1; no
+Layout (D33): `<prefix>/cmr` (the launcher), `<prefix>/cmr-paths.conf` (written by the launcher),
+`<prefix>/env` (ONE conda env: python, cmr, tesseract and conda-forge ffmpeg 7.1.1; no
 ffmpeg only with `--use-system-ffmpeg` and a system ffmpeg that passes the test),
-`<prefix>/ffmpeg-bin/{ffmpeg,ffprobe}` (symlinks to the chosen binaries: `<prefix>/env/bin/*` or,
-opt-in, the system ones),
-`<prefix>/install-state` (key=value: version, ffmpeg_mode, ffmpeg, slate, demo, workspace, bin_dir,
-conda, installed = time of the last run), `<prefix>/.cmr-install-prefix` (marker), `<prefix>/conda`
-(only after a Miniforge bootstrap), launcher `~/.local/bin/cmr`, log
+`<prefix>/ffmpeg-bin/{ffmpeg,ffprobe}` (symlinks: RELATIVE `../env/bin/*`, so they survive a
+move, or, opt-in, absolute to the system ones),
+`<prefix>/install-state` (key=value: version, ffmpeg_mode, ffmpeg, slate, demo, prefix, root (empty
+when the prefix is not `ROOT/bin`), workspace, work, bin_dir, conda, installed = time of the last
+run; read by the INSTALLER only, never by the launcher), `<prefix>/.cmr-install-prefix` (marker),
+`<prefix>/conda` (only after a Miniforge bootstrap), PATH link `~/.local/bin/cmr`, workspace
+`ROOT/demo`, work area `ROOT/work`, log
 `${XDG_CACHE_HOME:-~/.cache}/cmr/logs/install.log` (D29 line style, component `install`,
 6-hex run id; rotated to `.1` above 5 MB; kept on failure; paths, versions, conda/pip/doctor
 output and the self-test console report: nothing private beyond paths, checked on the real run).
@@ -62,7 +74,8 @@ ancestor: 3072 MB with slate, 2048 MB without, 512 MB for an update, 1024 MB for
 that adds ffmpeg to an env without it (no `--use-system-ffmpeg`); +512 MB when demo spots are
 still to be made for this workspace; ESTIMATES) -> 2 conda ->
 3 ffmpeg -> 4 network (`curl -I` conda.anaconda.org; skipped without curl) -> 5 env -> 6 wheel
--> 7 launcher + links -> 8 workspace -> state -> 9 verify -> 10 demo spots -> summary + PATH
+-> 7 launcher + links + PATH link -> 8 workspace -> 9 work area -> state -> 10 verify -> 11 demo
+spots -> summary + PATH
 hint (with the first-check command when demo spots exist) + policy text.
 
 Decisions (installer-local; the main thread may lift them into the root CLAUDE.md):
@@ -119,14 +132,17 @@ Decisions (installer-local; the main thread may lift them into the root CLAUDE.m
   just removed. Real run: the
   `conda install` into an env made by the old installer only ADDED packages (nothing updated or
   downgraded, libxml2 unchanged), 14 s.
-- **Launcher** (`/bin/sh`, marker line `# CheckMyRender launcher (generated by install.sh)`):
-  `PATH=<prefix>/ffmpeg-bin:$PATH` (only ffmpeg/ffprobe are prepended, so cron's short PATH
-  works), `CMR_TESSERACT=<prefix>/env/bin/tesseract` (with slate; a profile param `tesseract`
-  still wins, D27), `unset PYTHONPATH PYTHONHOME`, `PYTHONNOUSERSITE=1` (Flame/user Python
-  settings must not leak into the env Python), on macOS only `TMPDIR` from `getconf
-  DARWIN_USER_TEMP_DIR` when unset (see "ffmpeg 7.1 single env", issue 1),
-  `exec <prefix>/env/bin/cmr "$@"`. A foreign
-  `~/.local/bin/cmr` (e.g. an old manual install) is never overwritten: exit 1.
+- **Launcher** `<prefix>/cmr` (`/bin/sh`, marker line `# CheckMyRender launcher (generated by
+  install.sh)`; relocatable, see "Single cmr folder"): finds its own folder, then
+  `PATH=<bin>/ffmpeg-bin:$PATH` (only ffmpeg/ffprobe are prepended, so cron's short PATH
+  works), with slate `CMR_TESSERACT=<bin>/env/bin/tesseract` (a profile param `tesseract`
+  still wins, D27) and `TESSDATA_PREFIX=<bin>/env/share/tessdata` (when that folder exists;
+  overrides a user value), `unset PYTHONPATH PYTHONHOME`, `PYTHONNOUSERSITE=1`, on macOS only
+  `TMPDIR` from `getconf DARWIN_USER_TEMP_DIR` when unset (see "ffmpeg 7.1 single env", issue
+  1), `exec <bin>/env/bin/python -I -m cmr "$@"` (`-I`: no PYTHON* variables, no user site, the
+  current folder is NOT put on sys.path, so a `yaml.py` or `cmr/` in the folder you run cmr in
+  cannot shadow the package; `cli.py` sets `prog="cmr"`). The PATH link `<bin-dir>/cmr`: a
+  foreign file or a link to a non-cmr file is never replaced (exit 1, nothing changed).
 - **Idempotence:** state version != bundle version -> upgrade in place (conda install to the
   specs, wheel reinstalled); same version -> only re-link, re-write launcher, copy missing
   workspace files and re-verify (adds packages only if newly needed); `--upgrade` -> conda
@@ -140,9 +156,10 @@ Decisions (installer-local; the main thread may lift them into the root CLAUDE.m
   edited them"; without a record, e.g. a workspace from before this change, every differing
   file counts as edited). `README.md` and `USERGUIDE.md` are copied to the workspace top and
   replaced on every run (reference text; `templates/README.md` links `../USERGUIDE.md`).
-- **Uninstall:** asks (EOF = no; `--yes` skips), removes the launcher only if it carries the
-  marker (in the bin_dir of the install), then `rm -rf <prefix>` only if the marker exists.
-  Workspace and logs are kept.
+- **Uninstall:** asks (EOF = no; `--yes` skips), removes the PATH link only if it points to
+  this launcher (or, after a move, dangles to where it was) and an old-layout launcher FILE
+  with the marker, then `rm -rf <prefix>` only if the marker exists. Workspace, work area and
+  logs are kept (with `--root` the root folder keeps `demo/` and `work/`).
   (It does not call `conda remove`: the env lives inside the prefix; a stale line may stay in
   `~/.conda/environments.txt`, harmless.)
 - **Self-test:** `cmr --version`, `cmr doctor` (exit 0 required, output shown), with slate
@@ -254,9 +271,97 @@ test lines on Rocky were removed again).
   A bash:3.2 container (docker, musl/busybox) was used for templates/automation/overnight_qc.sh
   only; the Mac run is the stronger bash 3.2 test for the installer.
 
-## Tests (`tests/installer/test_installer.py`, 83)
-Run alone: `PYTHONPATH=src /usr/bin/python3 -m pytest -q tests/installer` (~10 s). Every run uses a
-temp HOME and a PATH of symlinked coreutils + fakes; the real conda/ffmpeg are unreachable.
+## Single cmr folder (D33, built 2026-10-27)
+- **Default root `~/cmr`** (D33 proposal adopted): `~/cmr/bin` prefix + launcher, `~/cmr/demo`
+  workspace, `~/cmr/work` work area, link `~/.local/bin/cmr`. `--prefix`/`--workspace`
+  override single parts (work stays `ROOT/work`; with a prefix outside `ROOT/bin` the paths
+  file has an empty `CMR_ROOT`).
+- **Launcher self-location** (POSIX sh, no `readlink -f`): `p=$0`; while `p` is a link (max 40)
+  `readlink p` (relative targets resolved against the link's folder); `CMR_BIN=$(cd -P
+  dirname && pwd)`. Install-time facts are embedded as variables: `CMR_VERSION`, `cmr_rooted`,
+  `cmr_demo`/`cmr_work` (relative = inside the folder above `bin`, else absolute; work empty
+  with `--no-work`), `cmr_ffmpeg`/`cmr_ffprobe` (empty = env ffmpeg), `cmr_slate`. Cost ~2 ms
+  per start (dash, Linux; measured 100 starts without the exec: 0.18 s).
+- **`<bin>/cmr-paths.conf`**: line 1 `# for <CMR_BIN> <version>`, then `KEY='value'` (sh single
+  quotes, `'` written `'\''`; read with `. FILE`): `CMR_VERSION CMR_ROOT CMR_BIN CMR_LAUNCHER
+  CMR_ENV CMR_FFMPEG CMR_FFPROBE CMR_TESSERACT CMR_TESSDATA CMR_DEMO CMR_WORK` (empty = not
+  installed / not in the root layout). The launcher reads line 1 with the `read` builtin on
+  every start (no fork) and rewrites the file (temp `cmr-paths.conf.tmp.<pid>` + `mv -f`)
+  when it differs (moved, other version) and the folder is writable; any write error is
+  silent and never stops the run. The installer deletes the file after writing the launcher;
+  the verify step's `cmr --version` writes it (and the install fails if it does not).
+- **Moved install** (installer side): install-state `prefix=` (older states: derived from the
+  env `ffmpeg=` path) differs from the prefix now (also physically, `cd -P`) -> MOVED: no
+  conda repair; printed "This cmr folder was moved ... installs cmr <v> FRESH here"; MODE
+  install; `env/` and `conda/` are renamed `*.before-move`, an EXIT trap puts them back if the
+  install fails before cmr is in the new env, they are deleted once pip succeeded. A conda
+  recorded inside the old/new prefix (own Miniforge) is not used and `--bootstrap-conda` is
+  implied (the user accepted it before). Remembered paths inside the old prefix's parent
+  (workspace, work, bin_dir) are rebased onto the new parent; demo/ and work/ keep their
+  markers, so nothing is regenerated or reseeded. A dangling PATH link is repaired.
+- **PATH link**: absent -> create; points here -> keep; dangling -> repair ("Repaired");
+  points to another file with the marker -> re-point; regular file with the marker (old
+  layout) -> replaced by the link ("Replaced the launcher file"); anything else -> exit 1.
+  Created as `ln -sfn` to a temp name + `mv -f` (atomic).
+- **Previous layout** (`~/.local/share/cmr` + `~/cmr-workspace` + launcher FILE): when neither
+  `--root` nor `--prefix` is given, `~/cmr/bin` has no install-state and the old prefix has
+  marker + state, the run continues there (LEGACY): note "Previous layout found ... kept
+  working; to switch: --uninstall, then install"; the launcher moves into the prefix and the
+  file in `~/.local/bin` becomes a link; no work area (`CMR_WORK` empty). Re-run, upgrade and
+  uninstall work there.
+- **Hand-made trial state** (Mac 2026-10-27: `--prefix ROOT/bin --bin-dir ROOT/bin`, state
+  without `prefix=`): a remembered `bin_dir` equal to the prefix in a pre-D33 state is NOT
+  reused (it meant "launcher folder"), so the link goes to `~/.local/bin`; an existing manual
+  link there to `ROOT/bin/cmr` counts as ours. A work area without `.cmr-work-files` is
+  seeded with the missing files only (the trial's files stay as they are), then marked.
+- **Work area** `ROOT/work`: `specs/ profiles/ jobs/ reports/` + the bundle's `work/` files,
+  copied only where no file exists; `.cmr-work-files` lists what was placed (may be empty).
+  With the marker present: "Already set up", never touched again (also `--upgrade`, new
+  version, moved install); never removed (also `--uninstall`).
+Real runs 2026-10-27 (throwaway HOME + CONDA_PKGS_DIRS in the session scratchpad, conda of
+`~/anaconda3` via CONDA_EXE, `env -i PATH=/usr/bin:/bin`, deleted afterwards), Linux dev machine
+(Ubuntu, conda 24.9.2):
+| step | result |
+|---|---|
+| `--root A/cmr` fresh install, cold cache | 35 s, exit 0; layout, relative ffmpeg links, paths file, link |
+| in place: doctor via the link; job_template check in work/; starter slated spot | doctor 0; `JOB my_project`, FAIL 5 (clip vs spec, expected), report in work/reports; PASS 27 / SKIPPED 1 |
+| `mv A/cmr "B/Moved Folder/cmr"` (space), launcher by its new path | identical results; paths file rewritten for the new place; env tesseract alone fails ("cannot open .../A/cmr/bin/env/share/tessdata"), through the launcher OCR passes |
+| installer `--root "B/Moved Folder/cmr"` | "folder was moved ... FRESH", conda create into the new env (path with a space), link repaired, work/ md5 + marker mtime unchanged, demo not regenerated, 9 s (warm cache); re-run 1.9 s "already installed" |
+| `--uninstall --root ...` | bin/ and link gone, demo/ + work/ kept |
+| old layout (HEAD installer, `--no-demo`) then the new installer, no flags | "Previous layout found", launcher file -> link, doctor 0, no ~/cmr created; uninstall removes prefix + link, keeps ~/cmr-workspace |
+
+Mac Studio (macOS 26.7.1, /bin/bash 3.2.57, no conda on the machine; everything in
+`~/cmr-installer-test` with a throwaway HOME, `--bootstrap-conda`; folder deleted afterwards; the
+user's `~/.local/bin/cmr` and `~/Desktop/Tools/cmr` untouched, mtimes checked):
+| step | result |
+|---|---|
+| `--root A/cmr --bootstrap-conda` fresh | 3 min (Miniforge download + cold cache), exit 0; relative ffmpeg links, link, work area |
+| in place via the link, `env -i` (no TMPDIR) | doctor 0; job_template `FAIL 5` (same counts as Linux); starter slated spot PASS 27 / SKIPPED 1 |
+| `mv` to `B/Moved Folder/cmr`, launcher by its new path | doctor 0, same results incl. OCR; paths file rewritten; env tesseract alone fails on the old tessdata path |
+| installer on `B/Moved Folder/cmr` (own Miniforge) | FAILED first: `ERROR: Cannot install into directories with spaces` from the Miniforge installer; the EXIT trap put env/ and conda/ back and the moved launcher still ran. FIX: refused before any change ("contains a space ... nothing was changed"; `test_bootstrap_refuses_prefix_with_space`), verified on the Mac |
+| `mv` to `C/cmr`, installer `--root C/cmr` without `--yes`, stdin closed | "moved ... FRESH", own Miniforge not reused, a new one bootstrapped without a question, env rebuilt, link repaired, work/demo kept, 2 min 45 s; probe via the link as above; re-run 4 s "already installed" |
+| `--uninstall --yes --root C/cmr` | bin/ (with Miniforge) and link removed, demo/ + work/ kept |
+
+## Tests (`tests/installer/test_installer.py`, 97)
+Run alone: `PYTHONPATH=src /usr/bin/python3 -m pytest -q tests/installer` (~80 s incl. the bundle
+build). Every run uses a temp HOME and a PATH of symlinked coreutils + fakes; the real conda/ffmpeg
+are unreachable. The fake env python hands `-I -m cmr` to the fake console script; the fake cmr
+records CMR_TESSERACT, the resolved ffmpeg, PYTHONPATH, TMPDIR and TESSDATA_PREFIX.
+bash 3.2 on Linux (2026-10-27): the musl bash 3.2.57 of the `bash:3.2` docker image, copied out
+with its `ld-musl-x86_64.so.1` and `libncursesw.so.6` and started through a two-line sh wrapper
+(`exec <dir>/ld-musl-x86_64.so.1 --library-path <dir> <dir>/bash32 "$@"`), as
+`CMR_TEST_BASH=<wrapper>`: all installer tests pass.
+D33 tests: `--root` layout + paths file + state + uninstall keeps demo/work, `--root` refusals,
+dry run with `--root` writes nothing, `--bin-dir` = prefix (no link), link safety (foreign
+link refused, dangling repaired, other cmr launcher re-pointed, uninstall keeps a link that
+points elsewhere), self-location through a relative + absolute link chain and via PATH from
+another folder, moved folder (launcher works, paths file rewritten once, read-only folder:
+runs silently, stale file kept), moved install -> fresh install (conda create, link repaired,
+work/demo untouched, state rebased, next run normal), moved + failing conda -> env put back,
+moved + own Miniforge -> bootstrapped again without asking, work area seeded once (existing
+file kept, deleted/edited seeds not restored on re-run/--upgrade/new version, kept by
+uninstall), `--no-work`, old layout re-run/upgrade/uninstall and uninstall straight from it,
+hand-made trial state (bin_dir = prefix not reused), bundle contains the work seeds.
 Covered: syntax (shellcheck when installed: not on the dev machine), help/bad args/root/prefix
 refusals/offline hook, unsupported OS incl. Intel Mac and Rosetta (nothing created), macOS arm64
 fake install (log in ~/Library/Logs/cmr, ~/.zprofile hint, MacOSX-arm64 Miniforge), dry run (nothing written, conda only
@@ -407,6 +512,10 @@ guard applies only when that parent holds a `pyproject.toml`); the Mac test run 
 `src/cmr/__init__.py` next to `tests/` for `test_build_rejects_mismatched_wheel`.
 
 ## Still UNVERIFIED
+- D33: a real `install.sh --root ~/Desktop/Tools/cmr` over the hand-made trial (its state has no
+  `prefix=`; tested with fakes only: `test_single_folder_trial_state`); upgrade from a real
+  older version (only same-version re-runs were real); the launcher under launchd/cron after a
+  move; Rocky 9 (the Linux runs were on the Ubuntu dev machine, with Anaconda conda 24.9.2).
 - Miniforge bootstrap on Linux (verified on the Mac only; the Linux URL follows the same pinned
   pattern and its `.sha256` asset exists in the release listing).
 - A machine without Anaconda/conda on PATH, a non-writable base `pkgs/`, a studio proxy/firewall.
@@ -436,6 +545,11 @@ guard applies only when that parent holds a `pyproject.toml`); the Mac test run 
    Miniforge BSD-3; Anaconda `defaults` is not used (its terms apply to orgs > 200 people).
 
 ## Known limits / later
+D33: after a move, an installer run WITHOUT `--root NEWDIR` targets `~/cmr` (a fresh install
+there if nothing is installed); the dangling PATH link is only repaired by a run pointed at the
+new place. A bootstrapped Miniforge cannot live in a path with a space (refused up front). The
+moved-install rebuild costs a full install (conda is never repaired; Miniforge downloaded again).
+Remembered paths are rebased only when they lay inside the old prefix's parent folder.
 Offline cache (`--offline-dir`: conda `--offline` + a `file://` channel built by
 build_bundle.sh), free-space check of conda's `pkgs/` file system, `installed=` in the state is the last
 run, not the first install; the 512 MB update estimate does not cover adding ffmpeg to an

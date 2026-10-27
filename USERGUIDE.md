@@ -6,7 +6,7 @@ against a **spec sheet** (what the delivery must be) using a **profile** (how st
 looks at every frame and every audio sample, and reports each problem with **timecode and
 frame number**.
 
-> **Status: release candidate for 0.1.0.** The checks pass their test suite on generated media and on a few
+> **Status: 0.1.1.** The checks pass their test suite on generated media and on a few
 > real files (see the "Known limits" of each check). Results on your renders still need a
 > human look: use cmr as a second pair of eyes, not as the final authority.
 
@@ -55,11 +55,11 @@ was produced by that command on generated test media (Appendix A), unless marked
 **UNVERIFIED**. All names in the examples (shows, clients, people, Ad-IDs) are fictional.
 
 Two folders are named in the commands. `TEMPLATES` is the folder with the starter files:
-`~/cmr-workspace/templates` after the installer (section 20), or `templates/` in the
+`~/cmr/demo/templates` after the installer (section 20), or `templates/` in the
 CheckMyRender folder you received (`~/CheckMyRender` in this guide). The **demo spots** (a
 slated ad spot, clean and with planted errors) are made by the installer: the clean one is
-already in `~/cmr-workspace/templates/starter/media/`, the others are in
-`~/cmr-workspace/demo_spots/`. The other **demo-media script** (`tests/media/make_media.py`, the
+already in `~/cmr/demo/templates/starter/media/`, the others are in
+`~/cmr/demo/demo_spots/`. The other **demo-media script** (`tests/media/make_media.py`, the
 review renders of quick starts A and C) is only in the `tests/` folder of a CheckMyRender folder.
 
 ---
@@ -102,16 +102,16 @@ start is the **starter folder**, one copy per job with all of the above in it (q
 
 ## Sample files that ship with cmr
 
-Every config file cmr reads has a sample. After the installer they are in `~/cmr-workspace/`
+Every config file cmr reads has a sample. After the installer they are in `~/cmr/demo/`
 (the installer copies `examples/` and `templates/` there, plus this guide and the README; a
 sample you edited there is never overwritten by an update). In a CheckMyRender folder you
 received (a source checkout, `~/CheckMyRender` in this guide) they are in the same sub-folders.
 The paths below are relative to either folder.
 
-| kind of file | where (under `~/cmr-workspace/` or `~/CheckMyRender/`) | which sample for which situation |
+| kind of file | where (under `~/cmr/demo/` or `~/CheckMyRender/`) | which sample for which situation |
 |---|---|---|
 | **starter folder** (start here) | `templates/starter/` | a complete job folder for an HD ad spot: `job.yaml` (with slate checks), `job_no_slate.yaml` (without), `spec_starter.yaml`, `deliverables.csv`, `slates/slate_template.yaml`, `media/` (after the installer it already holds the clean demo spot; your video goes here) and a `README.md` with the steps. Works unedited with the demo spot (quick starts A and B) |
-| **demo spots** (made by the installer) | `demo_spots/` (only in `~/cmr-workspace/`) | `clean/` the slated demo spot that passes (the same file as in `templates/starter/media/`); `errors/client_typo/` the same spot with one slate typo; `errors/many_errors/` a spot with many planted errors, each listed in its `manifest.yaml` (quick starts A and B). About 60 MB each; `install.sh --no-demo` skips them |
+| **demo spots** (made by the installer) | `demo_spots/` (only in `~/cmr/demo/`) | `clean/` the slated demo spot that passes (the same file as in `templates/starter/media/`); `errors/client_typo/` the same spot with one slate typo; `errors/many_errors/` a spot with many planted errors, each listed in its `manifest.yaml` (quick starts A and B). About 60 MB each; `install.sh --no-demo` skips them |
 | spec sheet (job facts) | `templates/specs/` (and `templates/starter/spec_starter.yaml`) | `spec_review_render.yaml` review render (quick start A, without a job file); `spec_master_generic.yaml` final file-based master; `spec_broadcast_hd_longform.yaml` HD long form with bars, slate, drop-frame timecode, two audio streams, captions; `spec_spot_short_form.yaml` ad spot without slate reading; `spec_colour_interim_noaudio.yaml` picture-only colour/comp interim |
 | spec sheet, filled-in examples | `examples/` | `spec_review.yaml` (with `review`), `spec_hd_broadcast.yaml` and `spec_spot_30s.yaml` (with `release`): shorter, illustrative values; start from `templates/specs/` for real jobs |
 | profile, stock (rules) | inside cmr, not a file in the workspace (in a checkout: `profiles/`) | used by name: `--profile review`; `cmr profiles list` lists them, `cmr profiles show NAME` prints one. Never edited: your own profile extends one (section 7) |
@@ -167,15 +167,15 @@ cmr doctor                                   # must say OK
 ```
 
 The installer also makes the demo spots (10-20 s): a clean slated :03 spot in
-`~/cmr-workspace/templates/starter/media/` and spots with planted errors in
-`~/cmr-workspace/demo_spots/errors/`.
+`~/cmr/demo/templates/starter/media/` and spots with planted errors in
+`~/cmr/demo/demo_spots/errors/`.
 
 **2. Copy the starter folder.** One folder per job; the original stays as it is. The copy
 carries the demo spot in `media/`:
 
 ```
 mkdir -p ~/qc
-cp -r ~/cmr-workspace/templates/starter ~/qc/my_first_job
+cp -r ~/cmr/demo/templates/starter ~/qc/my_first_job
 cd ~/qc/my_first_job
 ```
 
@@ -221,14 +221,14 @@ report: ~/qc/my_first_job/reports/cmr_report_20261026-205028_044402.json (also ~
 
 ```
 rm media/*.mov
-cp ~/cmr-workspace/demo_spots/errors/client_typo/*.mov media/
+cp ~/cmr/demo/demo_spots/errors/client_typo/*.mov media/
 cmr check media/*.mov
   ...
   FAIL    slate.content: slate CLIENT 'Sample Bugrers', expected 'Sample Burgers' @ 00:59:53:01-00:59:57:28 (frames 1-148)
 RESULT FAIL (exit 2): PASS 26, SKIPPED 1, FAIL 1
 ```
 
-`~/cmr-workspace/demo_spots/errors/many_errors/` holds a spot with many planted errors (wrong
+`~/cmr/demo/demo_spots/errors/many_errors/` holds a spot with many planted errors (wrong
 length, black frames, clipping, a 1-pixel edge line, slate mistakes; each one is listed in the
 `manifest.yaml` next to it); its result is shown in quick start B.
 
@@ -319,13 +319,13 @@ reading results (section 6), profiles (section 7), spec fields (section 8).
 The installer made the demo spots once, with the generator it ships (`demo/make_spot.py` in the
 bundle; `tests/slate/make_spot.py` in a CheckMyRender folder). A demo file you delete or move
 is not made again by a later install (the list of what it made is
-`~/cmr-workspace/.cmr-demo-files`). To make a fresh set by hand, run the generator with the
+`~/cmr/demo/.cmr-demo-files`). To make a fresh set by hand, run the generator with the
 Python of cmr's environment (it has Pillow and numpy unless you installed with `--no-demo`)
 and the ffmpeg of cmr:
 
 ```
 mkdir -p ~/qc/spots
-PATH=~/.local/share/cmr/ffmpeg-bin:$PATH ~/.local/share/cmr/env/bin/python cmr-<version>/demo/make_spot.py ~/qc/spots --short
+PATH=~/cmr/bin/ffmpeg-bin:$PATH ~/cmr/bin/env/bin/python cmr-<version>/demo/make_spot.py ~/qc/spots --short
 ```
 
 From a CheckMyRender folder, any Python with Pillow, numpy and PyYAML works:
@@ -343,7 +343,7 @@ audio track; the generator `make_media.py` is in the `tests/` folder and needs o
 and ffmpeg). Quick start C and the reference sections use this `~/cmr_demo` folder.
 
 ```
-TEMPLATES=~/cmr-workspace/templates          # or ~/CheckMyRender/templates (see the top of this guide)
+TEMPLATES=~/cmr/demo/templates          # or ~/CheckMyRender/templates (see the top of this guide)
 mkdir -p ~/cmr_demo && cd ~/cmr_demo
 python3 ~/CheckMyRender/tests/media/make_media.py . one_track     # needs ffmpeg only
 mkdir -p specs
@@ -466,14 +466,14 @@ else is still checked:
   ERROR   slate.content: slate not read: tesseract not found ('tesseract'); install tesseract 5 and put it on PATH, or set CMR_TESSERACT or the profile param `tesseract`
 ```
 
-The demo spot in `~/cmr-workspace/demo_spots/errors/many_errors/` carries many planted errors
+The demo spot in `~/cmr/demo/demo_spots/errors/many_errors/` carries many planted errors
 (listed in the `manifest.yaml` next to it). Here checked with the review rules (`--profile
 spot_review`, where some slate findings are WARN instead of FAIL). Abridged output (audio,
 colour-bar and some long lines left out or shortened):
 
 ```
-cmr check ~/cmr-workspace/demo_spots/errors/many_errors/*.mov --profile spot_review
-FAIL    ~/cmr-workspace/demo_spots/errors/many_errors/SB X League 2026_ProRes Generic Submaster_QB Pat_03_ABCD1234567H_1280x720_Slated.mov
+cmr check ~/cmr/demo/demo_spots/errors/many_errors/*.mov --profile spot_review
+FAIL    ~/cmr/demo/demo_spots/errors/many_errors/SB X League 2026_ProRes Generic Submaster_QB Pat_03_ABCD1234567H_1280x720_Slated.mov
         30000/1001 fps, 299 frames, start TC 00:59:53:00 (file)
   FAIL    filename: filename: expected 'SB X League 2026_ProRes Generic Submaster_QB Pat_03_ABCD1234567H_1920x1080_Slated.mov', got '...1280x720_Slated.mov'
   FAIL    slate.claims: slate DURATION ':03' = 90 frames (3 s x 30 timecode frames/s) but the program is 89 frames (-1) @ 00:59:53:01-00:59:57:28 (frames 1-148)
@@ -489,11 +489,11 @@ RESULT FAIL (exit 2): PASS 17, SKIPPED 1, WARN 6, FAIL 13
 ```
 
 **When a slate field is wrong.** A spot whose slate spells the client `Sample Bugrers`
-(`~/cmr-workspace/demo_spots/errors/client_typo/`, quick start A step 4). With the delivery
+(`~/cmr/demo/demo_spots/errors/client_typo/`, quick start A step 4). With the delivery
 rules of `job.yaml` this is a FAIL:
 
 ```
-cmr check ~/cmr-workspace/demo_spots/errors/client_typo/*.mov
+cmr check ~/cmr/demo/demo_spots/errors/client_typo/*.mov
   ...
   FAIL    slate.content: slate CLIENT 'Sample Bugrers', expected 'Sample Burgers' @ 00:59:53:01-00:59:57:28 (frames 1-148)
 RESULT FAIL (exit 2): PASS 26, SKIPPED 1, FAIL 1
@@ -737,7 +737,7 @@ is recorded in the report (`summary.mode`).
 | `cmr waive ...` | create waivers (section 12) |
 | `cmr doctor` | installation check (section 20) |
 | `cmr logs path\|tail\|collect` | diagnostic log (section 15) |
-| `cmr --version` | prints `cmr 0.1.0` |
+| `cmr --version` | prints `cmr 0.1.1` |
 
 `cmr probe` (shortened and some lines joined):
 
@@ -2265,7 +2265,7 @@ all cases:
 | `no_captions/` | captions missing |
 | `corrupt/` | damaged bytes in the middle |
 
-Slated spots for quick starts A and B: the installer makes them in `~/cmr-workspace`
+Slated spots for quick starts A and B: the installer makes them in `~/cmr/demo`
 (`templates/starter/media/`, `demo_spots/`; section 20). By hand (needs Python with Pillow, numpy
 and PyYAML, e.g. cmr's environment Python, see quick start A "Making the demo spots again"; writes to a folder
 outside the CheckMyRender folder): `python3 ~/CheckMyRender/tests/slate/make_spot.py OUTDIR
@@ -2316,29 +2316,45 @@ system ffmpeg, and never changes conda's base or other environments.
     cmr-<version>/install.sh --dry-run     # shows every step, changes nothing
     cmr-<version>/install.sh               # installs (about 1 minute)
 
+Everything goes into ONE folder, `~/cmr` by default (`--root DIR` for another place):
+
+| folder | what | who changes it |
+|---|---|---|
+| `~/cmr/bin` | the `cmr` launcher, its conda environment `env/`, `ffmpeg-bin/`, `cmr-paths.conf`, `install-state` | the installer only |
+| `~/cmr/demo` | examples/, templates/, this guide and the demo spots (reference copies) | the installer updates files you did not edit |
+| `~/cmr/work` | YOUR files: `specs/`, `profiles/`, `jobs/` (`job_template.yaml`), `reports/`, a README | you; set up once, never changed or removed by the installer |
+
+plus a link `~/.local/bin/cmr` -> `~/cmr/bin/cmr` so `cmr` is on your PATH. Start your own
+jobs in `~/cmr/work`: copy `jobs/job_template.yaml` to `jobs/<project>.yaml`, set the job id,
+and run `cmr check FILE --job ~/cmr/work/jobs/<project>.yaml` (its paths are relative to the job
+file; reports go to `~/cmr/work/reports`).
+
 What it does:
 - uses your conda (Anaconda/Miniconda/Miniforge on PATH or in ~/anaconda3, ~/miniconda3,
   ~/miniforge3), or offers to install Miniforge privately (`--bootstrap-conda`; not yet verified on a
   machine without conda);
-- creates its own environment ~/.local/share/cmr/env (Python 3.12, PyYAML, jsonschema, the cmr
+- creates its own environment ~/cmr/bin/env (Python 3.12, PyYAML, jsonschema, the cmr
   package, tesseract 5.5.2 for the slate checks; `--no-slate` skips tesseract, about 0.4 GB less on disk plus about 0.5 GB of package cache);
 - installs the pinned, tested conda-forge ffmpeg 7.1.1 into the same environment
-  ~/.local/share/cmr/env (about 0.6 GB), on every machine, so test results are comparable
+  ~/cmr/bin/env (about 0.6 GB), on every machine, so test results are comparable
   between the Rocky workstations and the Mac. The system ffmpeg is not used (and not changed).
   `--use-system-ffmpeg` uses it instead when it is 5.1 or newer and has every filter cmr needs
   (Rocky 9: 5.1.10), and prints a warning that results may differ from 7.1.1 (e.g. Rocky's
   ffprobe 5.1 reads ProRes colour tags as unknown); if it does not pass, 7.1.1 is installed
   anyway. Give the flag on every run: a run without it (re-run, update) adds 7.1.1 to an install
   that used the system ffmpeg (about 1 GB free space needed for that). An older install with a
-  separate ~/.local/share/cmr/ffmpeg-env is migrated automatically on the next run;
-- writes the launcher ~/.local/bin/cmr (`--bin-dir DIR` for another folder) and copies examples/,
-  templates/ and this guide to ~/cmr-workspace (`--workspace DIR`); files you edited there are never
-  overwritten, unedited ones are updated on upgrade;
+  separate ~/cmr/bin/ffmpeg-env is migrated automatically on the next run;
+- writes the launcher ~/cmr/bin/cmr and the link ~/.local/bin/cmr to it (`--bin-dir DIR` puts
+  the link into another folder; an existing `cmr` there that is not from this installer is
+  never replaced), and copies examples/, templates/ and this guide to ~/cmr/demo
+  (`--workspace DIR`); files you edited there are never overwritten, unedited ones are updated
+  on upgrade;
+- sets up the work area ~/cmr/work once (`--no-work` skips it); a file already there is kept;
 - ends with `cmr doctor` and a self-test on a generated clip. Log: ~/.cache/cmr/logs/install.log;
 - makes the demo spots once (10-20 s; the generator `demo/make_spot.py` ships in the bundle
   and runs with Pillow and numpy, which are added to cmr's environment for it): the clean
-  slated spot in ~/cmr-workspace/templates/starter/media/ (and demo_spots/clean/), the spots with
-  planted errors in ~/cmr-workspace/demo_spots/errors/ (client_typo/, many_errors/), about
+  slated spot in ~/cmr/demo/templates/starter/media/ (and demo_spots/clean/), the spots with
+  planted errors in ~/cmr/demo/demo_spots/errors/ (client_typo/, many_errors/), about
   60 MB each. A file that is already there is never overwritten, and a demo file you deleted
   is not made again by a later run. If making them fails (e.g. no font found), the install
   still succeeds with a warning and the command to make them by hand. `--no-demo` skips the
@@ -2362,16 +2378,43 @@ If ~/.local/bin is not on your PATH the installer says so; add
 `export PATH="$HOME/.local/bin:$PATH"` to ~/.bashrc, or call ~/.local/bin/cmr by its full path.
 No `conda activate` is needed, also not in scripts or cron (verified with `env -i`). On macOS the launcher also sets TMPDIR to your per-user temp folder when it is unset (cron, launchd), because tesseract there cannot read files under /tmp; do not set `TMPDIR=/tmp` yourself.
 
-Other options: `--prefix DIR` (install location), `--upgrade` (refresh packages and reinstall cmr),
-`--uninstall` (asks; removes the environment and launcher, keeps your workspace, its demo
-spots and the logs), `--no-demo`, `-y`.
+Other options: `--root DIR` (the cmr folder), `--prefix DIR` (the bin folder somewhere else),
+`--upgrade` (refresh packages and reinstall cmr), `--uninstall` (asks; removes ~/cmr/bin and the
+PATH link if it points there, keeps ~/cmr/demo with its demo spots, ~/cmr/work and the logs),
+`--no-demo`, `--no-work`, `-y`. Give `--root DIR` again for a re-run, update or uninstall of a
+folder other than ~/cmr.
 Exit codes: 0 done, 1 failed (log kept), 2 usage/unsupported platform, 3 cancelled.
 `tests/media/make_media.py` (the review renders of quick starts A "Without a job file" and C) is
 not in the bundle: those examples need a checkout of the repository.
 
 ### Updating
-Unpack the new bundle and run its install.sh: it upgrades in place, updates the workspace files you
-did not edit and keeps the ones you did. Same version again: re-checks only (seconds).
+Unpack the new bundle and run its install.sh (with `--root DIR` if the cmr folder is not ~/cmr):
+it upgrades in place, updates the workspace files you did not edit and keeps the ones you did.
+Same version again: re-checks only (seconds). The work area is never touched.
+
+An install made before the single folder (environment in ~/.local/share/cmr, workspace
+~/cmr-workspace, a launcher file in ~/.local/bin) keeps working: a plain re-run updates it there
+and turns ~/.local/bin/cmr into a link. To move to ~/cmr: `install.sh --uninstall`, then
+`install.sh` (the old workspace stays; delete it when you no longer need it).
+
+### Moving the cmr folder
+Moving the whole folder is supported (e.g. `mv ~/cmr ~/Tools/cmr`): the launcher finds its own
+folder when it starts (also through the PATH link) and rewrites `bin/cmr-paths.conf` with the new
+paths. What is not repaired, as for any application: the link `~/.local/bin/cmr` still points
+to the old place, and paths in your cron lines, launchd plists or scripts. Call the launcher by
+its new path (`~/Tools/cmr/bin/cmr`), and run the installer again with the new place
+(`install.sh --root ~/Tools/cmr`) to repair the link. That run also rebuilds the conda
+environment at the new place (conda environments cannot be moved; it takes as long as a fresh
+install), keeping demo/, work/ and your files; if it fails, the previous environment is put back.
+If the installer had installed its own Miniforge (a machine without conda), the new path must not
+contain a space: the Miniforge installer refuses such a folder (the installer says so before it
+changes anything). The launcher itself works from a path with spaces.
+
+`bin/cmr-paths.conf` lists the absolute paths for other tools and scripts (sh syntax,
+`KEY='value'`, read it with `. ~/cmr/bin/cmr-paths.conf`): `CMR_VERSION`, `CMR_ROOT`,
+`CMR_BIN`, `CMR_LAUNCHER`, `CMR_ENV`, `CMR_FFMPEG`, `CMR_FFPROBE`, `CMR_TESSERACT`,
+`CMR_TESSDATA`, `CMR_DEMO`, `CMR_WORK` (empty = not installed). The launcher writes it; do not
+edit it.
 
 ### cmr doctor
 
@@ -2382,7 +2425,7 @@ most left out here; paths shortened):
 
 ```
 cmr --version
-cmr 0.1.0
+cmr 0.1.1
 cmr doctor
 ffmpeg: /usr/bin/ffmpeg
 ffprobe: /usr/bin/ffprobe
