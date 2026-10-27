@@ -10,6 +10,8 @@ Profile rules (CLAUDE.md "Substitution rules"):
 - Path segments that are integers index into lists (${spec.audio.tracks.0.layout}).
 - Missing key = ConfigError. Only the `spec.` namespace exists; no expressions.
 - Lazy: entries of checks with `enabled: false` are not substituted (refs kept verbatim).
+  Params a check lists in `lazy_params` (filename: `tags`) are substituted per entry; an entry
+  with a missing key becomes {"$missing": text}, an error only when the check uses it.
 - Per check: reserved keys `enabled` (default true), `severity` (default fail),
   `quality` (fast|high, default high) and `max_findings` (report cap, 0 = all; default
   from `cmr check --max-findings`, 10); all other keys are check params.
@@ -17,8 +19,10 @@ Profile rules (CLAUDE.md "Substitution rules"):
 from __future__ import annotations
 
 import copy
+import fnmatch
 import hashlib
 import importlib.resources
+import os
 import re
 from pathlib import Path
 
@@ -145,7 +149,7 @@ def find_job(job: str | None = None, job_dir: str | None = None, no_job: bool = 
 
 def job_settings(path: Path) -> dict:
     """What a job file says about the run (D31): {path (as given), dir, id, spec, profile,
-    waivers, waivers_named, output}. Other paths are absolute (relative ones resolve from the job file's
+    waivers, waivers_named, output, input ({folder, pattern, pick} or None)}. Other paths are absolute (relative ones resolve from the job file's
     folder). `profile` stays a stock profile name unless it looks like a path (has `/` or ends
     in .yaml/.yml). `waivers` defaults to waivers.yaml next to the job file (it may not exist
     yet: no waivers); `waivers_named` says whether the job file set it."""
@@ -159,6 +163,10 @@ def job_settings(path: Path) -> dict:
     if prof and ("/" in prof or Path(prof).suffix in (".yaml", ".yml")):
         prof = str((base / Path(prof).expanduser()).resolve())
     out["profile"] = prof
+    inp = data.get("input")
+    out["input"] = None if not inp else {
+        "folder": str((base / Path(inp["folder"]).expanduser()).resolve()),
+        "pattern": inp.get("pattern", "*"), "pick": inp.get("pick", "latest")}
     out["waivers_named"] = out["waivers"] is not None
     if out["waivers"] is None:
         out["waivers"] = str(base / JOB_WAIVERS)
@@ -209,7 +217,79 @@ def build_spec(spec_path, job_path=None, deliverables_csv=None, row=None) -> tup
             except MissingSpecKey as e:
                 e.where = f"`{sec}:` section of the spec sheet or job file"
                 raise
+    filename_regex(spec.get("job") or {})   # invalid regex / conflicting name keys: exit 3
     return spec, inputs
+
+
+def filename_regex(job: dict) -> re.Pattern | None:
+    """The compiled spec `job.filename_regex` (matched with fullmatch against the file name),
+    or None. ConfigError for an invalid regex, or when job.filename / job.naming_pattern is
+    given as well (only one way to say what the name must be)."""
+    rx = job.get("filename_regex")
+    if not rx:
+        return None
+    both = [k for k in ("filename", "naming_pattern") if job.get(k)]
+    if both:
+        raise ConfigError(f"spec job.filename_regex and job.{both[0]} are both set: give only "
+                          "one (filename_regex for a pattern, filename/naming_pattern for one "
+                          "exact name)")
+    try:
+        return re.compile(rx)
+    except re.error as e:
+        raise ConfigError(f"spec job.filename_regex '{rx}' is not a valid regular expression: "
+                          f"{e}") from None
+
+
+VERSION_GROUP = "version"   # named group of job.filename_regex that `pick: latest` sorts by
+REGEX_EXAMPLE = r"^Color_6K_v(?P<version>\d+)\.mov$"
+
+
+def pick_input(inp: dict, job: dict) -> dict:
+    """job.yaml `input:` (D31 addendum): the file to check in `inp['folder']`. Candidates =
+    names matching the glob `pattern` (fnmatch, case-sensitive, not recursive; dot-files such
+    as macOS `._x` AppleDouble files ignored; NFC-compared). `pick: latest` = the HIGHEST
+    number in the `version` group of `job.filename_regex` (numeric, not newest mtime).
+    Candidates that do not match the regex are not considered and come back as WARN notices
+    (never skipped silently). ConfigError: no folder, regex without a version group, no
+    conforming candidate (lists what the glob found), two candidates with one version.
+    Returns {folder, pattern, pick, picked (name), path, version, conforming, notices}."""
+    folder, pattern, pick = Path(inp["folder"]), inp.get("pattern") or "*", inp.get("pick") or "latest"
+    if not folder.is_dir():
+        raise ConfigError(f"job input folder {folder} not found (job.yaml `input: folder:`)")
+    rx = filename_regex(job)
+    if rx is None or VERSION_GROUP not in rx.groupindex:
+        raise ConfigError(
+            f"job input `pick: {pick}` needs the spec's job.filename_regex with a named group "
+            f"(?P<{VERSION_GROUP}>\\d+) holding the version number, e.g. '{REGEX_EXAMPLE}'" +
+            (f" (the spec's regex '{rx.pattern}' has none)" if rx else " (the spec has none)"))
+    names = sorted(n for n in os.listdir(folder) if not n.startswith(".")
+                   and fnmatch.fnmatchcase(nfc(n), pattern) and (folder / n).is_file())
+    notices, ok = [], {}
+    for n in names:
+        m = rx.fullmatch(nfc(n))
+        v = m and m.group(VERSION_GROUP)
+        if not m:
+            why = f"does not match job.filename_regex '{rx.pattern}'"
+        elif not (v and v.isascii() and v.isdigit()):
+            why = f"the version group of job.filename_regex is {v!r}, not a number"
+        else:
+            ok.setdefault(int(v), []).append(n)
+            continue
+        notices.append({"severity": "WARN", "file": n,
+                        "message": f"{why}: not considered (check the name)"})
+    if not ok:
+        found = ", ".join(names) if names else "nothing"
+        raise ConfigError(f"job input: no file in {folder} matching {pattern!r} matches "
+                          f"job.filename_regex '{rx.pattern}' (the pattern found: {found})")
+    dup = {v: ns for v, ns in ok.items() if len(ns) > 1}
+    if dup:
+        raise ConfigError("job input: several files have the same version number: " + "; ".join(
+            f"version {v}: {', '.join(ns)}" for v, ns in sorted(dup.items())))
+    version = max(ok)
+    name = ok[version][0]
+    return {"folder": str(folder), "pattern": pattern, "pick": pick, "picked": name,
+            "path": str(folder / name), "version": version,
+            "conforming": sum(map(len, ok.values())), "notices": notices}
 
 
 def _check_layout_shape(timing: dict) -> None:
@@ -315,19 +395,53 @@ def is_disabled(cfg) -> bool:
     return isinstance(cfg, dict) and cfg.get("enabled", True) is False
 
 
+MISSING = "$missing"   # marker of a lazy param entry whose ${spec.*} key the spec lacks
+
+
+def _lazy_params() -> dict[str, tuple[str, ...]]:
+    """{check_id: Check.lazy_params} of the check plugins (imported late: engine imports
+    this module)."""
+    from . import engine
+    engine.load_checks()
+    return {cid: c.lazy_params for cid, c in engine.REGISTRY.items() if c.lazy_params}
+
+
+def _substitute_check(cfg, spec: dict, lazy: tuple[str, ...]):
+    """substitute() for one enabled check entry. Params named in the check's `lazy_params`
+    (mappings) are substituted entry by entry: an entry whose ${spec.*} key is missing becomes
+    {MISSING: "<error text>"} instead of failing the load; the check raises it only if it
+    actually uses that entry (e.g. filename `tags.audio_tag` on a picture-only spec)."""
+    if not lazy or not isinstance(cfg, dict):
+        return substitute(cfg, spec)
+    out = {}
+    for k, v in cfg.items():
+        if k in lazy and isinstance(v, dict):
+            out[k] = {}
+            for name, entry in v.items():
+                try:
+                    out[k][name] = substitute(entry, spec)
+                except MissingSpecKey as e:
+                    out[k][name] = {MISSING: str(e)}
+        else:
+            out[k] = substitute(v, spec)
+    return out
+
+
 def resolve_profile(name_or_path: str, spec: dict) -> tuple[dict, list[str]]:
     """Merged profile with ${spec.*} substituted. Lazy for checks with `enabled: false`: their
     entries keep the refs verbatim (never looked up, so a spec without e.g. an audio section
     loads a profile whose audio checks are switched off). Enabled checks: a missing key is a
-    ConfigError (D4)."""
+    ConfigError (D4), except inside entries of a check's `lazy_params` (_substitute_check)."""
     merged, shas = load_profile_raw(name_or_path)
+    lazy = _lazy_params()
     out = {}
     for k, v in merged.items():
         if k == "checks":
             out[k] = {}
             for cid, cfg in (v or {}).items():
                 try:
-                    out[k][cid] = copy.deepcopy(cfg) if is_disabled(cfg) else substitute(cfg, spec)
+                    out[k][cid] = (copy.deepcopy(cfg) if is_disabled(cfg) else
+                                   _substitute_check(cfg, spec, lazy.get(cid, ())))
                 except MissingSpecKey as e:
                     e.where = f"profile check {cid} (profile {merged.get('name')!r})"
                     raise

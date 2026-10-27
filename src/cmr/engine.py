@@ -106,6 +106,9 @@ class Check:
     requires_filters: tuple[str, ...] = ()
     params_schema: dict | None = None
     qualities: tuple[str, ...] = ("high",)   # profile `quality` values this check implements
+    # mapping params substituted entry by entry: a missing ${spec.*} key in one entry is not a
+    # load error, the entry becomes {config.MISSING: text} (config._substitute_check)
+    lazy_params: tuple[str, ...] = ()
 
     def taps(self, ctx: "CheckContext") -> list[Tap]:
         return []

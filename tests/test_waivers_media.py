@@ -56,7 +56,7 @@ def test_black_run_waived_then_content_changed(media, tmp_path, capsys):
     assert rc == 0 and rep["summary"]["exit_code"] == 0
     assert f["severity"] == "PASS" and f["raw_severity"] == "FAIL" and f["waiver_ref"] == "W0001"
     assert f["waiver"]["reason"] == "intended cut to black" and f["waiver"]["distance"] == 0
-    assert rep["summary"]["counts"]["WAIVED"] == 1 and rep["schema_version"] == "1.4"
+    assert rep["summary"]["counts"]["WAIVED"] == 1 and rep["schema_version"] == "1.5"
     assert [w["id"] for w in rep["waivers"]["applied"]] == ["W0001"]
     assert "WAIVED  video.black_runs" in out and "WAIVED 1" in out   # never hidden
 

@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, asdict
 from enum import IntEnum
 from typing import Any
 
-SCHEMA_VERSION = "1.4"   # Candidate / Finding / report schema version (1.1: waivers; 1.2: findings cap, category waivers; 1.3: summary mode/quality; 1.4: summary.job_id, waivers.foreign; additive)
+SCHEMA_VERSION = "1.5"   # Candidate / Finding / report schema version (1.1: waivers; 1.2: findings cap, category waivers; 1.3: summary mode/quality; 1.4: summary.job_id, waivers.foreign; 1.5: input (job.yaml pick) + summary.notices; additive)
 
 
 class Severity(IntEnum):

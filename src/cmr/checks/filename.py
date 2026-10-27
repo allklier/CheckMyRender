@@ -8,11 +8,16 @@ for this file, see cmr/deliverables.py) and `{file.x}` (named groups of
 deliverables.filename_regex). A pattern with {row.*}/{file.*} needs the profile param
 `deliverables: "${spec.deliverables}"`; with match generated_name/both this check is the
 one that verifies the whole generated name (the slate checks do not repeat it).
+Pattern instead of one name: spec `job.filename_regex` (Python regex, re.fullmatch on the file
+name; only one of filename / naming_pattern / filename_regex, else a config error). `tags` is a
+lazy param: a tag whose ${spec.*} key the spec lacks (e.g. audio_tag on a picture-only spec) is
+an error only when the naming_pattern uses it.
 """
 from __future__ import annotations
 
 import re
 
+from ..config import MISSING, filename_regex
 from ..engine import Check, Skip, register
 from ..model import Severity
 from ..schemas import OPT_OBJ, check_params
@@ -21,6 +26,8 @@ _PH = re.compile(r"\{([A-Za-z0-9_]+)\}")
 
 
 def _tag(name, spec_tag):
+    if isinstance(spec_tag, dict) and MISSING in spec_tag:
+        raise KeyError(f"tag {name}: {spec_tag[MISSING]}")
     if isinstance(spec_tag, dict):
         frm, mapping = spec_tag.get("from"), spec_tag.get("map") or {}
         for k, v in mapping.items():
@@ -36,7 +43,7 @@ def expected_filename(job: dict, tags: dict, ns: dict | None = None) -> str:
         return job["filename"]
     pattern = job.get("naming_pattern")
     if not pattern:
-        raise Skip("spec has neither job.filename nor job.naming_pattern")
+        raise Skip("spec has none of job.filename, job.naming_pattern, job.filename_regex")
     return render_name(pattern, {"job": job, **(ns or {})}, tags)
 
 
@@ -44,11 +51,18 @@ def expected_filename(job: dict, tags: dict, ns: dict | None = None) -> str:
 class Filename(Check):
     id = "filename"
     params_schema = check_params(job=OPT_OBJ, tags={"type": "object"}, deliverables=OPT_OBJ)
+    lazy_params = ("tags",)
 
     def evaluate(self, ctx, candidates):
         from .. import deliverables
         job, tags = ctx.params.get("job") or {}, ctx.params.get("tags") or {}
         act = ctx.media.name
+        rx = filename_regex(job)   # ConfigError -> ERROR "configuration error"
+        if rx is not None:
+            if rx.fullmatch(act):
+                return []
+            return [ctx.finding(f"filename: expected a name matching '{rx.pattern}', got {act!r}",
+                                expected=rx.pattern, actual=act)]
         ns, out = None, []
         pattern = job.get("naming_pattern") or ""
         if not job.get("filename") and re.search(r"\{(row|file)\.", pattern):

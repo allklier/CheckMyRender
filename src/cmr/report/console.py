@@ -55,7 +55,16 @@ def render(report: dict, verbose: bool = False) -> str:
                                  f"{x['worst_severity']})")
     s = report["summary"]
     counts = ", ".join(f"{k} {v}" for k, v in s["counts"].items() if v)
+    if s.get("notices"):
+        counts += f"; NOTICE {s['notices']} (see INPUT)"
     sup = f" ({s['suppressed']} not listed but counted; --max-findings 0 lists all)" if s.get("suppressed") else ""
+    inp = report.get("input")
+    if inp:
+        lines.append(f"INPUT {inp['picked']} (version {inp['version']}, highest of "
+                     f"{inp['conforming']} matching job.filename_regex) from {inp['folder']}, "
+                     f"pattern {inp['pattern']!r}")
+        for n in inp["notices"]:
+            lines.append(f"  {'NOTICE':7} {n['severity']} {n['file']}: {n['message']}")
     if s.get("job_id"):
         lines.append(f"JOB {s['job_id']}")
     lines.append(f"RESULT {s['worst']} (exit {s['exit_code']}): {counts}{sup}")

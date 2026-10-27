@@ -167,7 +167,7 @@ def test_counts_and_exit_code_include_suppressed():
     assert f["suppressed"][0]["count"] == 21 and f["suppressed"][0]["worst_severity"] == "WARN"
     assert rep["summary"]["counts"]["INFO"] == 20 and rep["summary"]["counts"]["WARN"] == 2
     assert rep["summary"]["suppressed"] == 21 and rep["summary"]["exit_code"] == exit_code(Severity.WARN)
-    assert rep["schema_version"] == "1.4"
+    assert rep["schema_version"] == "1.5"
     out = render(rep)
     assert "(21 additional video.blanking findings suppressed; worst: WARN)" in out
     assert "INFO 20, WARN 2" in out

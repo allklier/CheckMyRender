@@ -17,6 +17,9 @@ job:
   version: "v03"                     # EDIT: review version
   client: "Internal"
   naming_pattern: "{title_code}_{episode}_{format}_{fps_tag}_{audio_tag}_{version}.mov"
+  # Or a name PATTERN instead (delete naming_pattern then: give only one). A Python regex on
+  # the whole file name; the group `version` is what a job file's `input: pick: latest` sorts by:
+  # filename_regex: '^EXFEAT_101_v(?P<version>\d{2})\.mov$'
 
 video:
   container: mov

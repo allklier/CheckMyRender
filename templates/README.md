@@ -67,6 +67,12 @@ on the command line always wins. Examples: `starter/job.yaml` (unedited demo; `s
 Waivers made with `cmr waive` in the folder go into its waivers.yaml and carry the job id,
 so they are only applied to renders of this job.
 
+Repeated renders of one job (v03, v04, ...): an `input:` block (`folder`, `pattern`,
+`pick: latest`) lets `cmr check --job JOB.yaml` check the highest version without naming the
+file; the spec then gives `job.filename_regex` with a `(?P<version>\d+)` group, and names that
+do not match it are listed as NOTICEs. Commented example at the end of
+`starter/job_no_slate.yaml`; details in the guide, "Which file to check: `input:`".
+
 ## First steps with a copied pair
 
     cp templates/specs/spec_master_generic.yaml ~/qc/specs/spec_excoffee_rush30_master.yaml

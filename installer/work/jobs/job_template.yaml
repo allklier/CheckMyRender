@@ -5,3 +5,14 @@ profile: ../profiles/client_review.yaml
 output: ../reports
 job:
   id: my_project            # EDIT: letters, digits, _ - .
+# Which file to check when no FILE is given (`cmr check --job THIS.yaml`): the highest version
+# number among the files in `folder` matching `pattern`. Needs `job.filename_regex` with a
+# (?P<version>...) group in the spec (instead of naming_pattern), e.g.
+#   job:
+#     filename_regex: '^Color_6K_v(?P<version>\d{2})\.mov$'
+# Files matching the pattern but not the regex (typos) are listed as NOTICEs (WARN, exit 1).
+# A FILE on the command line wins over this block.
+# input:
+#   folder: ../renders          # absolute, ~ allowed, or relative to this file
+#   pattern: "Color*.mov"       # name glob in that folder (not recursive); default "*"
+#   pick: latest                # highest version number (not the newest file date)

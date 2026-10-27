@@ -1,6 +1,6 @@
 """cmr command line (argparse).
 
-  cmr check FILE... [--profile P] [--spec S] [--job J | --job-dir D | --no-job]
+  cmr check [FILE...] [--profile P] [--spec S] [--job J | --job-dir D | --no-job]
             [--deliverables CSV] [--row VALUE]
             [--report json [-o DIR]] [--fail-on warn|fail] [-v] [--quality fast|high]
             [--waivers WAIVERS.yaml] [--max-findings N]
@@ -8,6 +8,8 @@
              DIR defaults to the current directory)
             D31: a job file (./job.yaml, --job, --job-dir) may name spec, profile, waivers and
             the report folder (`output`, which also turns the JSON report on); options win.
+            No FILE: the job file's `input:` picks the file (highest `version` group of the
+            spec's job.filename_regex); FILE arguments win over it.
   cmr waive REPORT.json [--finding N ... | --all-check CHECK_ID] --reason TEXT [--expires D]
             [-o WAIVERS.yaml] [--job J | --job-dir D | --no-job] [--any-job]
             (no --finding/--all-check: list waivable findings)
@@ -42,7 +44,7 @@ import yaml
 
 from . import __version__, engine, log, runmode, waivers
 from .config import (JOB_FILE, ConfigError, MissingSpecKey, build_spec, find_job, is_disabled,
-                     job_settings, list_profiles, load_profile_raw, resolve_profile)
+                     job_settings, list_profiles, load_profile_raw, pick_input, resolve_profile)
 from .media import ProbeError, probe
 from .model import EXIT_ERROR, EXIT_PASS, Severity
 from .report import build_report, to_json
@@ -145,7 +147,8 @@ def _config_error(e: ConfigError, spec=None, job=None) -> int:
 def apply_job(a, js: dict | None) -> str | None:
     """Fill the run options the command line left out from the job file (D31; explicit options
     win): spec, profile, waivers (the job's file when it exists), report folder (`output`
-    also turns the JSON report on, also when -o moves it). Returns a usage problem, else None."""
+    also turns the JSON report on, also when -o moves it). No FILE arguments need the job's
+    `input:` block (picked later, pick_input). Returns a usage problem, else None."""
     if js:
         a.spec = a.spec or js["spec"]
         a.profile = a.profile or js["profile"]
@@ -156,12 +159,35 @@ def apply_job(a, js: dict | None) -> str | None:
                      log.redact("path", js["waivers"]))
         if js["output"]:      # the job wants JSON reports; -o only moves them
             a.output, a.report = a.output or js["output"], a.report or "json"
+    if not a.files and not (js and js["input"]):
+        return ("no file to check: give FILE(s), or a job file with an `input:` block "
+                "(folder + pattern) that says which file to check")
     miss = [o for o, v in (("--spec", a.spec), ("--profile", a.profile)) if not v]
     if not miss:
         return None
     where = (f"the job file {js['path']} names none" if js else
              f"no {JOB_FILE} in the current folder (or use --job / --job-dir)")
     return f"{' and '.join(miss)} required: {where}"
+
+
+def pick_job_input(a, js: dict | None, spec: dict) -> dict | None:
+    """FILE arguments win over the job's `input:` (logged); without them the job input picks
+    the one file (config.pick_input; ConfigError = exit 3). Sets a.files; returns the pick."""
+    if a.files:
+        if js and js["input"]:
+            LOG.info("files given on the command line: the job file's `input:` is ignored")
+        return None
+    sel = pick_input(js["input"], spec.get("job") or {})
+    a.files = [sel["path"]]
+    LOG.info("input: picked %s (version %d of %d conforming) from %s pattern %s; %d notice(s)",
+             log.redact("path", sel["picked"]), sel["version"], sel["conforming"],
+             log.redact("path", sel["folder"]), log.redact("arg", sel["pattern"]), len(sel["notices"]))
+    for n in sel["notices"]:
+        LOG.warning("input notice: %s %s", log.redact("path", n["file"]), log.redact_quoted(n["message"]))
+    print(f"input: {sel['picked']} (version {sel['version']}) from {sel['folder']}"
+          + (f"; {len(sel['notices'])} file(s) not considered, see NOTICE" if sel["notices"] else ""),
+          file=sys.stderr)
+    return sel
 
 
 def cmd_check(a) -> int:
@@ -198,6 +224,7 @@ def cmd_check(a) -> int:
             spec_sha = inputs["spec"]["sha256"]
             profile, shas = resolve_profile(a.profile, spec)
             check_profile(profile, substituted=True)
+            sel = pick_job_input(a, js, spec)
     except ConfigError as e:
         return _config_error(e, a.spec, job_path)
     if a.quality:
@@ -258,7 +285,7 @@ def cmd_check(a) -> int:
         report = build_report(results, profile["name"], shas, str(a.spec), spec_sha,
                               engine.ffmpeg_version(a.ffmpeg), a.fail_on, wsum, cap, limits,
                               job=inputs.get("job"), mode=a.mode,
-                              quality=a.quality or "profile", job_id=job_id)
+                              quality=a.quality or "profile", job_id=job_id, input_sel=sel)
     sys.stdout.write(render(report, a.verbose))
     if a.report == "json":
         out = Path(a.output or ".")
@@ -363,7 +390,7 @@ def cmd_waive(a) -> int:
         return EXIT_ERROR
     try:
         rep = json.loads(Path(a.report).read_text())
-        if rep.get("schema_version") not in ("1.0", "1.1", "1.2", "1.3", "1.4"):
+        if rep.get("schema_version") not in ("1.0", "1.1", "1.2", "1.3", "1.4", "1.5"):
             raise ValueError(f"unsupported report schema_version {rep.get('schema_version')!r}")
         expires = waivers.parse_date(a.expires)
         rjob = rep["summary"].get("job_id")
@@ -587,7 +614,9 @@ def main(argv=None) -> int:
     jg.add_argument("--no-job", action="store_true", help=f"ignore ./{JOB_FILE}")
 
     c = sub.add_parser("check", help="check files against a profile + spec", parents=[lo, jo])
-    c.add_argument("files", nargs="+")
+    c.add_argument("files", nargs="*", metavar="FILE",
+                   help="file(s) to check (default: the one file the job file's `input:` "
+                        "picks: highest version number in its folder)")
     c.add_argument("--profile", help="profile name (profiles/NAME.yaml) or path (default: the "
                                      "job file's `profile`)")
     c.add_argument("--spec", help="spec sheet YAML (default: the job file's `spec`)")

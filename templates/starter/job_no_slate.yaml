@@ -27,3 +27,15 @@ job:
   # Delete both lines below to skip the filename check (it is then SKIPPED, not failed).
   title: "SB X League 2026_ProRes Generic Submaster_QB Pat"   # EDIT: spot title as in the filename
   naming_pattern: "{title}_03_ABCD1234567H_1920x1080_Slated.mov"   # EDIT: length, Ad-ID, size, variant
+
+# Which file to check when no FILE is given (`cmr check --job THIS.yaml`): the highest version
+# number among the files in `folder` matching `pattern`. Needs `job.filename_regex` with a
+# (?P<version>...) group in the spec (instead of naming_pattern), e.g.
+#   job:
+#     filename_regex: '^Color_6K_v(?P<version>\d{2})\.mov$'
+# Files matching the pattern but not the regex (typos) are listed as NOTICEs (WARN, exit 1).
+# A FILE on the command line wins over this block.
+# input:
+#   folder: media               # absolute, ~ allowed, or relative to this file
+#   pattern: "*.mov"            # name glob in that folder (not recursive); default "*"
+#   pick: latest                # highest version number (not the newest file date)

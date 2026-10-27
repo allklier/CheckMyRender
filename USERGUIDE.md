@@ -6,7 +6,7 @@ against a **spec sheet** (what the delivery must be) using a **profile** (how st
 looks at every frame and every audio sample, and reports each problem with **timecode and
 frame number**.
 
-> **Status: 0.1.1.** The checks pass their test suite on generated media and on a few
+> **Status: 0.1.2.** The checks pass their test suite on generated media and on a few
 > real files (see the "Known limits" of each check). Results on your renders still need a
 > human look: use cmr as a second pair of eyes, not as the final authority.
 
@@ -621,6 +621,7 @@ job-scoped waivers: section 12.
 ```
 cmr check FILE [FILE ...] --profile PROFILE --spec SPEC.yaml [options]
 cmr check FILE [FILE ...]                       # in a folder with a job.yaml (below)
+cmr check --job jobs/X.yaml                     # no FILE: the job file's `input:` picks the file
 ```
 
 - `--profile`: a stock profile name (`release`, `review`, ...; list them with
@@ -661,6 +662,56 @@ deliverables: {...}            # slated spots only: the CSV (section 14)
 slate: {...}                   # slated spots only: template and expectations (section 14)
 ```
 
+#### Which file to check: `input:`
+
+For repeated checks of renders of one job (v03, v04, ... in one folder), the job file can say
+which file to check, so `cmr check --job jobs/X.yaml` (or `cmr check` in the job's folder)
+always checks the newest version without editing anything:
+
+```
+input:
+  folder: /Volumes/BFD/Local Jobs/5033_Shellac_TF/25_Review   # absolute, ~ allowed, or relative to the job file
+  pattern: "Color*.mov"          # which files in that folder are candidates (a name glob, not recursive; default "*")
+  pick: latest                   # the only value for now
+```
+
+and in the spec sheet (or the job file's `job:` section) the naming convention, with the
+version number as the named group `version`:
+
+```
+job:
+  filename_regex: '^Color_6K_v(?P<version>\d{2})\.mov$'
+```
+
+- **latest = the highest version number**, read from the `version` group of
+  `job.filename_regex` and compared as a number (`v10` beats `v9`), NOT the newest file date.
+- Files on the command line win: `cmr check --job X.yaml SOME.mov` checks `SOME.mov` and
+  ignores `input:` (the log says so). Neither files nor `input:` = `error: no file to check`
+  (exit 3).
+- Every candidate that matches `pattern` but NOT `job.filename_regex` (a mistyped name, an old
+  naming convention) is never skipped silently: it is listed as a NOTICE and the run is at
+  least WARN (exit 1; exit 0 only with `--fail-on fail`):
+
+  ```
+  input: Color_6K_v04.mov (version 4) from /Volumes/.../25_Review; 2 file(s) not considered, see NOTICE   (stderr)
+  ...
+  INPUT Color_6K_v04.mov (version 4, highest of 2 matching job.filename_regex) from /Volumes/.../25_Review, pattern 'Color*.mov'
+    NOTICE  WARN Color_6k_v05.mov: does not match job.filename_regex '^Color_6K_v(?P<version>\d{2})\.mov$': not considered (check the name)
+    NOTICE  WARN Color_v06_6K.mov: does not match job.filename_regex '^Color_6K_v(?P<version>\d{2})\.mov$': not considered (check the name)
+  RESULT WARN (exit 1): PASS 17; NOTICE 2 (see INPUT)
+  ```
+
+  The JSON report has the same in its top-level `input` block (`folder`, `pattern`, `pick`,
+  `picked`, `version`, `conforming`, `notices`) and `summary.notices`.
+- Config errors (exit 3): the folder does not exist; `pick: latest` but the spec has no
+  `job.filename_regex` or it has no `(?P<version>...)` group; no candidate matches the regex
+  (the error lists what the pattern found); two candidates with the same version number (e.g.
+  `v4` and `v04` with a `\d+` group: both are listed; rename or remove one).
+- Ignored: names starting with `.` (macOS `._*` AppleDouble files on shared drives) and
+  folders. The pattern is case-sensitive.
+- Not handled: a render that is still being written. cmr picks the highest version even when
+  the render app has not finished it; start the check when the render is done.
+
 A job without a slate only needs the first lines, e.g. `job_version`, `spec`, `profile`,
 `waivers`, `output`, `job: {id: ...}`. Examples: `templates/starter/job.yaml` (unedited
 demo; `templates/starter/job_no_slate.yaml` is a job without a slate), `templates/slate/job.yaml` (commented), `examples/spot_xr/`. See also
@@ -692,7 +743,7 @@ sub-command.
 | code | meaning |
 |---|---|
 | 0 | passed (or only INFO / SKIPPED; also WARN with `--fail-on fail`) |
-| 1 | worst result is WARN |
+| 1 | worst result is WARN (also: a job `input:` NOTICE, a candidate file whose name does not match `job.filename_regex`) |
 | 2 | worst result is FAIL |
 | 3 | ERROR: the tool could not check something (bad config, missing file, missing filter), **or a wrong command line** |
 
@@ -737,7 +788,7 @@ is recorded in the report (`summary.mode`).
 | `cmr waive ...` | create waivers (section 12) |
 | `cmr doctor` | installation check (section 20) |
 | `cmr logs path\|tail\|collect` | diagnostic log (section 15) |
-| `cmr --version` | prints `cmr 0.1.1` |
+| `cmr --version` | prints `cmr 0.1.2` |
 
 `cmr probe` (shortened and some lines joined):
 
@@ -875,19 +926,20 @@ See section 12.
 
 ### The JSON report
 
-`--report json -o DIR` writes `DIR/cmr_report_<date-time>_<run id>.json` (schema version 1.4)
+`--report json -o DIR` writes `DIR/cmr_report_<date-time>_<run id>.json` (schema version 1.5)
 and refreshes `DIR/cmr_report_latest.json`, a copy of the newest run. Runs never overwrite each
 other's reports. The console prints `report: PATH`. Use `latest` for `cmr waive` and scripts,
 the dated files as the archive. Main fields:
 
 | field | content |
 |---|---|
-| `schema_version` | `"1.4"` |
+| `schema_version` | `"1.5"` |
 | `tool` | `name`, `version`, `ffmpeg` (version line), `python` |
 | `profile` | `name`, `sha256` (one hash per profile file in the `extends` chain) |
 | `spec` | `path`, `sha256` (and `job` with the job file's path and hash) |
 | `files[]` | one entry per checked file, below |
-| `summary` | `worst`, `exit_code`, `fail_on`, `counts` (per severity, incl. `WAIVED`), `mode` (`foreground`/`background`), `quality` (`profile`, or `fast`/`high` from `--quality`), `job_id`, `max_findings`, `suppressed` |
+| `summary` | `worst`, `exit_code`, `fail_on`, `counts` (per severity, incl. `WAIVED`), `mode` (`foreground`/`background`), `quality` (`profile`, or `fast`/`high` from `--quality`), `job_id`, `max_findings`, `suppressed`, `notices` (run-level notices, below) |
+| `input` | only when the job file's `input:` picked the file: `folder`, `pattern`, `pick`, `picked`, `version`, `conforming` (candidates matching `job.filename_regex`), `notices[]` (`severity` WARN, `file`, `message`: candidates not considered). Notices make the run WARN, not the file |
 | `waivers` | only with waivers: `file`, `applied`, `content_changed`, `stale`, `expired`, `foreign` (waivers of another job, not applied) |
 
 Per file: `path`, `identity` (size + checksum of the first and last MiB: proves which file
@@ -1047,6 +1099,7 @@ spot short form, review render, colour interim without audio), `templates/starte
 | `job.title`, `job.title_code`, `job.episode`, `job.version`, `job.client` | `"EXFEAT"` | filename | free fields; any `job.x` can be a `{x}` placeholder in `naming_pattern` |
 | `job.filename` | `"EXFEAT_101_HD_2398_ST_v01.mov"` | filename | exact expected name; wins over the pattern |
 | `job.naming_pattern` | `"{title_code}_{episode}_{format}_{fps_tag}_{audio_tag}_{version}.mov"` | filename | see "Filename" below |
+| `job.filename_regex` | `'^Color_6K_v(?P<version>\d{2})\.mov$'` | filename, job `input:` | a name pattern instead of one name; group `version` = what `pick: latest` sorts by |
 | `video.container` | `mov` | container.format | as `cmr probe` prints it (`mov`, `mp4`, ...) |
 | `video.codec` | `prores` | video.codec | ffprobe codec name (`prores`, `h264`, `dnxhd`) |
 | `video.codec_profile` | `"422 HQ"` | video.codec | ProRes: `"422 Proxy"`, `"422 LT"`, `"422"`, `"422 HQ"`, `"4444"`, `"4444 XQ"`; H.264: `"High"`, `"Main"` ...; DNxHR: `"DNxHR HQ"` (LB, SQ, HQ, HQX, 444); DNxHD: the class as `cmr probe` shows it, e.g. `"DNxHD 175x"` (the `x` = 10-bit) |
@@ -1243,6 +1296,24 @@ Add or change tags in your profile under `filename: tags:` (a literal `name: "TE
 `name: {from: "${spec....}", map: {value: TAG}}`). The result is compared with the file's
 name, case-sensitive:
 `FAIL    filename: filename: expected 'SHOWNAME_101_HD_2398_ST_v03.mov', got 'show_101.mp4'`.
+
+A tag whose spec value is missing (e.g. `audio_tag` on a picture-only spec with
+`audio: {tracks: []}`) is an error only when the pattern uses it:
+`ERROR   filename: cannot build expected filename: tag audio_tag: missing spec key ...`.
+
+- `job.filename_regex`: a pattern instead of one name, for names that change per render (the
+  version number). A Python regular expression, matched against the whole file NAME (not the
+  folder). Give only one of `filename`, `naming_pattern` and `filename_regex` (two = config
+  error, exit 3; an invalid regex too). A name that does not match:
+  `WARN    filename: filename: expected a name matching '^Color_6K_v(?P<version>\d{2})\.mov$', got 'Color_6k_v05.mov'`
+  (at the profile's `filename` severity). No tags are needed, so it works on picture-only
+  specs with the stock profiles; a house profile no longer has to switch `filename` off.
+  Regex tips: put it in single quotes in YAML (backslashes stay as they are); `^...$` for the
+  whole name; `\.` for a literal dot; `\d{2}` = exactly two digits (`v03`; `v3` and `v103`
+  then do not match), `\d+` = any number of digits; `(?P<version>...)` names the version for
+  `input: pick: latest`; case matters (`6k` is not `6K`). Example for `Color_6K_v03.mov`:
+  `'^Color_6K_v(?P<version>\d{2})\.mov$'`. (Slated spots have a different key,
+  `deliverables.filename_regex`, whose groups feed the CSV row matching, section 14.)
 
 ---
 
@@ -1916,7 +1987,7 @@ cmr check spots/clean/*.mov --job job_label_colon.yaml --profile profile_lc.yaml
 PASS    spots/clean/SBX01703H.mov
         30000/1001 fps, 300 frames, start TC 00:59:53:00 (file)
   SKIPPED captions.presence: captions not required by spec
-  SKIPPED filename: spec has neither job.filename nor job.naming_pattern
+  SKIPPED filename: spec has none of job.filename, job.naming_pattern, job.filename_regex
   SKIPPED slate.bars: slate template 'xr_label_colon' defines no bars
 JOB nw_sb_label_colon
 RESULT PASS (exit 0): PASS 25, SKIPPED 3
@@ -2425,7 +2496,7 @@ most left out here; paths shortened):
 
 ```
 cmr --version
-cmr 0.1.1
+cmr 0.1.2
 cmr doctor
 ffmpeg: /usr/bin/ffmpeg
 ffprobe: /usr/bin/ffprobe

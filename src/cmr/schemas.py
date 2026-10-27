@@ -18,7 +18,10 @@ SPEC_SCHEMA = {
         "spec_version": {"const": 1},
         "job": {"type": "object", "properties": {
             "filename": {"type": "string"},
-            "naming_pattern": {"type": "string"}}},
+            "naming_pattern": {"type": "string"},
+            # Python regex, re.fullmatch on the file NAME; named group `version` (digits) is
+            # what job.yaml `input: {pick: latest}` sorts by. Only one of the three keys.
+            "filename_regex": {"type": "string", "minLength": 1}}},
         "video": {"type": "object", "properties": {
             "width": _opt_int,          # null = not specified, not checked (also below)
             "height": _opt_int,
@@ -65,6 +68,15 @@ JOB_SCHEMA = {
         "profile": {"type": "string", "minLength": 1},
         "waivers": {"type": "string", "minLength": 1},
         "output": {"type": "string", "minLength": 1},
+        # which file `cmr check` (no FILE arguments) checks: the highest `version` group of the
+        # spec's job.filename_regex among the files in `folder` matching `pattern` (a glob of
+        # names, not recursive; dot-files ignored). FILE arguments on the command line win.
+        "input": {
+            "type": "object", "additionalProperties": False, "required": ["folder"],
+            "properties": {
+                "folder": {"type": "string", "minLength": 1},
+                "pattern": {"type": "string", "minLength": 1, "pattern": "^[^/]+$"},
+                "pick": {"enum": ["latest"]}}},
         "deliverables": {
             "type": "object", "additionalProperties": False,
             "properties": {
@@ -172,7 +184,10 @@ REPORT_SCHEMA = {
         #     fast|high, or "profile" when not given; per-finding `quality` is the mode used)
         # 1.4 (additive): summary.job_id (job.yaml `job.id`, D31, null without one) and
         #     waivers.foreign (waivers of another job, skipped)
-        "schema_version": {"const": "1.4"},
+        # 1.5 (additive): `input` (the file picked from job.yaml `input:`, present only then:
+        #     folder, pattern, pick, picked, version, conforming, notices[]) and
+        #     summary.notices (run-level notices, each WARN; they raise summary.worst)
+        "schema_version": {"const": "1.5"},
         "tool": {"type": "object", "required": ["name", "version", "ffmpeg"]},
         "profile": {"type": "object", "required": ["name", "sha256"]},
         "spec": {"type": "object", "required": ["path", "sha256"]},
@@ -187,15 +202,31 @@ REPORT_SCHEMA = {
         "summary": {"type": "object",
                     "required": ["worst", "exit_code", "counts", "max_findings", "check_limits",
                                  "suppressed", "waived_by_category", "mode", "quality",
-                                 "job_id"],
+                                 "job_id", "notices"],
                     "properties": {
                         "job_id": {"type": ["string", "null"]},
+                        "notices": {"type": "integer", "minimum": 0},
                         "mode": {"enum": ["foreground", "background", None]},
                         "quality": {"enum": QUALITIES + ["profile"]},
                         "max_findings": {"type": "integer", "minimum": 0},
                         "check_limits": _counts,
                         "suppressed": {"type": "integer", "minimum": 0},
                         "waived_by_category": {"type": "integer", "minimum": 0}}},
+        "input": {"type": "object",   # 1.5: present only when job.yaml `input:` picked the file
+                  "required": ["folder", "pattern", "pick", "picked", "version", "conforming",
+                               "notices"],
+                  "additionalProperties": False,
+                  "properties": {
+                      "folder": {"type": "string"}, "pattern": {"type": "string"},
+                      "pick": {"enum": ["latest"]}, "picked": {"type": "string"},
+                      "version": {"type": "integer"},
+                      "conforming": {"type": "integer", "minimum": 1},
+                      "notices": {"type": "array", "items": {
+                          "type": "object", "required": ["severity", "file", "message"],
+                          "additionalProperties": False,
+                          "properties": {"severity": {"enum": SEVERITY_NAMES},
+                                         "file": {"type": "string"},
+                                         "message": {"type": "string"}}}}}},
         "waivers": {"type": "object",   # present only with `cmr check --waivers FILE`
                     "required": ["file", "applied", "content_changed", "stale", "expired",
                                  "foreign"]},

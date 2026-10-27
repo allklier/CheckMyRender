@@ -41,7 +41,7 @@ def blanking(rep):
 def test_cap_default_explicit_and_unlimited(clip, tmp_path, capsys):
     rc, rep = check(clip, tmp_path / "d")                        # default cap 10
     f = rep["files"][0]
-    assert rc == 2 and rep["schema_version"] == "1.4"
+    assert rc == 2 and rep["schema_version"] == "1.5"
     assert len(blanking(rep)) == 10 and all(x["severity"] == "FAIL" for x in blanking(rep))
     (s,) = f["suppressed"]
     assert (s["check_id"], s["count"], s["worst_severity"]) == ("video.blanking", 4, "FAIL")

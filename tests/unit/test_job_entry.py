@@ -80,7 +80,7 @@ def test_old_job_file_still_merges(tmp_path):
 
 # --- CLI precedence ---------------------------------------------------------------------------
 def ns(**kw):
-    d = dict(spec=None, profile=None, waivers=None, output=None, report=None)
+    d = dict(spec=None, profile=None, waivers=None, output=None, report=None, files=["f.mov"])
     d.update(kw)
     return Namespace(**d)
 

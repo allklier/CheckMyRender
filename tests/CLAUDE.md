@@ -195,6 +195,17 @@ superseded templates/quickstart: all files present and both job files load with 
 OCR checks ERROR; `--job job_no_slate.yaml` passes (exit 0, filename PASS, no slate checks); with
 tesseract the clean spot passes (exit 0) and the errors spot FAILs slate.content (exit 2)).
 
+## Job `input:` + `job.filename_regex` - tests
+`tests/unit/test_job_input.py` (no media: input schema, folder relative/absolute/~, latest =
+highest version numeric (v10 > v9, not mtime), notices for non-matching names, dot-files and
+folders ignored, duplicate version / no match / missing folder / no version group = config
+errors, NFD names, CLI usage error without FILE or input, FILE wins, report 1.5 `input` +
+notice exit 1 + console lines, regex schema/invalid/"give only one", filename message text, lazy
+tags on a picture-only spec with final/review/release-based profiles),
+`tests/test_job_input_media.py` (320x180 video-only clip copied under several names: `cmr check
+--job` picks v04 and lists the two non-conforming names (exit 1), a conforming v05 takes over,
+clean folder exit 0, FILE argument wins + mismatch WARN text, no conforming file exit 3).
+
 ## macOS (D32) and other ffmpeg builds - tests
 - Run on the Mac: see src/cmr/CLAUDE.md "macOS" (env python, `CMR_TESSERACT`, `CMR_TEST_MEDIA`;
   `CMR_TEST_BASH=/bin/bash` runs tests/installer with the real bash 3.2 and BSD tools; the toolbox

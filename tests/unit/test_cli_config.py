@@ -240,7 +240,7 @@ def test_report_records_mode_and_quality(tmp_path):
     _check(tmp_path, "-o", str(tmp_path), "--quality", "fast", "--mode", "background")
     rep = json.loads((tmp_path / cli.REPORT_LATEST).read_text())
     jsonschema.validate(rep, REPORT_SCHEMA)
-    assert rep["schema_version"] == "1.4"
+    assert rep["schema_version"] == "1.5"
     assert rep["summary"]["mode"] == "background" and rep["summary"]["quality"] == "fast"
     _check(tmp_path, "-o", str(tmp_path))
     rep = json.loads((tmp_path / cli.REPORT_LATEST).read_text())

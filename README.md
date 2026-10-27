@@ -4,7 +4,7 @@ Video QC suite for Rocky Linux and macOS on Apple Silicon. Command-line QC for r
 Flame and other finishing apps: an idiot-check that speeds up delivery without missing errors. It checks
 the settings of a file against a delivery spec, and inspects picture, sound and the slate of ad spots.
 
-> **Status: 0.1.1 (installer release on top of the verified 0.1.0).** Tested on generated media and on real renders (Rocky Linux 9 and
+> **Status: 0.1.2 (job `input:` with latest-file pick and filename regex, on top of 0.1.1 and the verified 0.1.0).** Tested on generated media and on real renders (Rocky Linux 9 and
 > Apple Silicon macOS, ffmpeg 7.1.1). Use it as a second pair of eyes, not as the final authority: the blanking
 > check in particular is noisy on long-form material until the planned ML verifier. Known limits and the next
 > steps are in [TODO.md](TODO.md).
@@ -49,9 +49,9 @@ that results may differ).
 You get a bundle `cmr-<version>-bundle.tar.gz`:
 
 ```
-tar xzf cmr-0.1.1-bundle.tar.gz
-cmr-0.1.1/install.sh --dry-run        # shows every step, changes nothing
-cmr-0.1.1/install.sh
+tar xzf cmr-0.1.2-bundle.tar.gz
+cmr-0.1.2/install.sh --dry-run        # shows every step, changes nothing
+cmr-0.1.2/install.sh
 cmr doctor
 ```
 

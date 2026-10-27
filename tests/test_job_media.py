@@ -58,7 +58,7 @@ def test_job_folder_needs_no_options(media, tmp_path, monkeypatch, capsys):
     assert "job file:" in io.err and "(job tjob)" in io.err
     assert "JOB tjob" in io.out and "report: " in io.out
     rep = latest(jd / "reports")
-    assert rep["schema_version"] == "1.4" and rep["summary"]["job_id"] == "tjob"
+    assert rep["schema_version"] == "1.5" and rep["summary"]["job_id"] == "tjob"
     assert rep["profile"]["name"] == "final" and rep["spec"]["job"]["path"].endswith("job.yaml")
     assert [x["severity"] for x in black(rep)] == ["FAIL"]
 

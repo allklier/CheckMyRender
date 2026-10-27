@@ -155,6 +155,52 @@ class Black(Check):
 - `cmr doctor` also prints `log: PATH` and `job.yaml in the current folder: none | PATH (job
   ID) | PATH - INVALID: ...` (informational, never a doctor failure).
 
+## Job `input:` + spec `job.filename_regex` (report schema 1.5; 2026-10-27)
+- Job file `input: {folder (required), pattern (default "*"), pick (only `latest`)}`
+  (`JOB_SCHEMA`, additionalProperties false; pattern must not contain `/`). `folder` resolves
+  like spec/profile/output (`config.job_settings`: absolute, `~`, else relative to the job
+  file's folder) -> `js["input"]` (None without the block).
+- Spec `job.filename_regex` (`SPEC_SCHEMA`; may also come from the job file's `job:` section,
+  merged as usual): Python regex, `re.fullmatch` on the file NAME (`MediaInfo.name`, NFC).
+  `config.filename_regex(job)` compiles it; invalid regex, or given together with
+  `job.filename` / `job.naming_pattern` = ConfigError "give only one" (checked in `build_spec`,
+  so exit 3 before anything runs; the filename check calls it too -> ERROR "configuration
+  error" for library callers). Filename check: mismatch = `filename: expected a name matching
+  '<regex>', got '<name>'` (expected = regex, actual = name) at the check severity; no tags used.
+- `cmr check` FILE is `nargs="*"`. `cli.apply_job`: no FILE and no job `input` = usage error
+  `no file to check: ...` (exit 3). `cli.pick_job_input` (after build_spec + profile, inside the
+  config-error block): FILE arguments win (log INFO "job file's `input:` is ignored"); else
+  `config.pick_input(js["input"], spec["job"])`: candidates = `os.listdir(folder)` names that
+  are files, do not start with `.` (AppleDouble `._*`), `fnmatch.fnmatchcase(nfc(name),
+  pattern)`; each candidate `fullmatch`ed (NFC) against the regex; group `version`
+  (`config.VERSION_GROUP`) must be ASCII digits -> int. latest = highest int (NOT mtime).
+  ConfigError (exit 3): folder missing; no regex or no `version` group (message shows
+  `(?P<version>\d+)` and the example `^Color_6K_v(?P<version>\d+)\.mov$`); no conforming
+  candidate (lists what the glob found, or "nothing"); ANY two conforming candidates with the
+  same version number (both listed, e.g. `v4` + `v04` with `\d+`). Non-conforming candidates
+  (regex mismatch, non-numeric version) = notices `{severity: WARN, file, message}`, never
+  silent. stderr `input: NAME (version N) from FOLDER[; K file(s) not considered, see NOTICE]`;
+  log INFO pick (redacted) + WARN per notice.
+- Report 1.5 (additive; `model.SCHEMA_VERSION`, `cmr waive` accepts 1.0-1.5): top-level `input`
+  (only when picked: folder, pattern, pick, picked, version, conforming, notices[]) and
+  `summary.notices` (count, always present). The notices' severity raises `summary.worst` and so
+  the exit code (WARN -> 1, 0 with `--fail-on fail`, D8), but NOT the file verdict
+  `files[].worst`; `summary.counts` stay finding counts. Console: `INPUT NAME (version N,
+  highest of K matching job.filename_regex) from FOLDER, pattern 'P'`, one `  NOTICE  WARN
+  FILE: message` line each, and `; NOTICE K (see INPUT)` on the RESULT line. This is the
+  run-level notice mechanism (none existed); reuse it for other run-level notices.
+- Lazy params (`Check.lazy_params`, `config._substitute_check`): mapping params a check lists
+  there are substituted entry by entry; an entry with a missing `${spec.*}` key becomes
+  `{config.MISSING ("$missing"): "missing spec key ..."}` instead of a load error. filename
+  declares `("tags",)`; `filename._tag` raises it as KeyError only when the naming_pattern uses
+  that tag -> ERROR `cannot build expected filename: tag audio_tag: missing spec key ...` (exit 3
+  as before, but at run time; a pattern without `{audio_tag}`, or filename_regex, needs no
+  audio). So a picture-only spec (`audio: {tracks: []}`) loads final/review/release-based
+  profiles with the filename check ON, once the audio content checks are off (they still need
+  `${spec.audio.codec}` etc.). `config._lazy_params` imports engine late (engine imports config).
+- Known limits: a render still being written is picked like any other file (no size/mtime
+  stability test); the glob is case-sensitive (also on case-insensitive APFS); one file per run.
+
 ## Packaging, report files, `--quality` (report schema 1.3)
 - pyproject has an explicit `[build-system]` (setuptools>=61, `setuptools.build_meta`); the
   offline wheel build (`installer/build_bundle.sh --python /usr/bin/python3`, setuptools 78.1)
